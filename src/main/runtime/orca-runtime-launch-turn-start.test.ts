@@ -3,6 +3,8 @@ import type { AgentStatusIpcPayload } from '../../shared/agent-status-types'
 import { AGENT_PROMPT_TEST_WORKTREE_PATH } from './agent-prompt-submission-runtime-test-fixture'
 import { OrcaRuntimeService } from './orca-runtime'
 import { makeStore } from './runtime-rpc-worktree-store-fixtures'
+import type { ProcessTableRow } from '../../shared/process-table-snapshot'
+import type * as TerminalForegroundGroup from './terminal-foreground-group'
 
 const { WORKTREE } = vi.hoisted(() => ({
   WORKTREE: {
@@ -12,6 +14,30 @@ const { WORKTREE } = vi.hoisted(() => ({
     isBare: false,
     isMainWorktree: false
   }
+}))
+
+// What `ps` limited to the pane's terminal answers: a login-wrapped zsh whose terminal's foreground
+// group is the shell itself, or the named process launched from it. The verdict stays the real one.
+const paneForeground = vi.hoisted(() => {
+  const state: { command: string | null } = { command: null }
+  return state
+})
+vi.mock('./terminal-foreground-group', async (importOriginal) => ({
+  ...(await importOriginal<typeof TerminalForegroundGroup>()),
+  readTerminalProcessRows: vi.fn(async (): Promise<ProcessTableRow[] | null> => {
+    const command = paneForeground.command
+    if (command === null) {
+      return null
+    }
+    const group = command === 'zsh' ? 101 : 102
+    return [
+      { pid: 100, ppid: 1, pgid: 100, tpgid: group, stat: 'Ss', command: '/usr/bin/login -flpq u' },
+      { pid: 101, ppid: 100, pgid: 101, tpgid: group, stat: 'S', command: '-zsh' },
+      ...(command === 'zsh'
+        ? []
+        : [{ pid: 102, ppid: 101, pgid: 102, tpgid: group, stat: 'S+', command }])
+    ]
+  })
 }))
 
 vi.mock('../git/worktree', () => ({
@@ -33,8 +59,11 @@ async function launchedCodex(
     write: () => true,
     kill: () => true,
     getForegroundProcess: async () => null,
-    confirmForegroundProcess: async () => options.foreground?.() ?? null
+    listProcesses: async () => [
+      { id: 'pty-launch', rootProcessId: 100, cwd: '/tmp/worktree-a', title: 'zsh' }
+    ]
   })
+  paneForeground.command = options.foreground?.() ?? null
   const { handle } = await runtime.createTerminal(`path:${AGENT_PROMPT_TEST_WORKTREE_PATH}`, {
     launchAgent: 'codex'
   })
