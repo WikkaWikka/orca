@@ -55,13 +55,30 @@ describe('OpenCode generation event output', () => {
     })
   })
 
-  it.each(['{broken', '{"title":"not an event"}', 'null'])(
-    'rejects malformed events %s',
-    (output) => {
-      expect(parseOpenCodeGenerationOutput(output)).toEqual({
-        ok: false,
-        error: 'OpenCode returned invalid JSON events.'
-      })
+  it.each([
+    { error: { name: 'MessageOutputLengthError', data: {} }, expected: 'MessageOutputLengthError' },
+    {
+      error: { name: 'ProviderError', data: { retryable: false } },
+      expected: 'ProviderError'
+    },
+    {
+      error: { name: 'ProviderError', message: 'Provider rejected the request', data: {} },
+      expected: 'Provider rejected the request'
     }
-  )
+  ])('reports named errors without a data message', ({ error, expected }) => {
+    const output = `${frame('text', 'partial')}\n${JSON.stringify({ type: 'error', error })}`
+    expect(parseOpenCodeGenerationOutput(output)).toEqual({ ok: false, error: expected })
+  })
+
+  it.each([
+    '{broken',
+    '{"title":"not an event"}',
+    'null',
+    JSON.stringify({ type: 'error', error: { name: 'ProviderError', data: { message: 42 } } })
+  ])('rejects malformed events %s', (output) => {
+    expect(parseOpenCodeGenerationOutput(output)).toEqual({
+      ok: false,
+      error: 'OpenCode returned invalid JSON events.'
+    })
+  })
 })

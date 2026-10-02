@@ -7,7 +7,7 @@ const eventSchema = z.object({
     .object({
       name: z.string().optional(),
       message: z.string().optional(),
-      data: z.object({ message: z.string() }).optional()
+      data: z.object({ message: z.string().optional() }).optional()
     })
     .optional()
 })
