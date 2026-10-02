@@ -29,7 +29,7 @@ const TERMINAL_HANDLE = 'term_worker'
 const STRUCTURED_ORCA_SESSION_ID = 'orca_session_id:sess_worker'
 
 const structuredPreambles: string[] = []
-/** A terminal worker's brief rides its launch line, in the launch file the host writes. */
+/** A terminal worker's brief, offered to its launch line; the carry rule takes it on a POSIX host. */
 const terminalBriefs: string[] = []
 
 // The session host the code under test reads; a structural fake, so no host type is claimed.
@@ -46,10 +46,11 @@ vi.mock('./orchestration/worker/worker-topology', async (importOriginal) => ({
     return { identity: { handle: STRUCTURED_HANDLE, sessionId: 'sess_worker' }, host: {} }
   },
   createExistingWorktreeWorkerTerminal: async (args: {
-    launchBrief?: { launchFile: { content: string } } | null
+    launchBrief?: { text: string; carried: boolean } | null
   }) => {
     if (args.launchBrief) {
-      terminalBriefs.push(args.launchBrief.launchFile.content)
+      args.launchBrief.carried = true
+      terminalBriefs.push(args.launchBrief.text)
     }
     return { handle: TERMINAL_HANDLE }
   }
@@ -159,17 +160,11 @@ describe('a worker cannot tell which mode it is running in', () => {
       status: 'running',
       exitCode: null
     })
-    // What an unpackaged build resolves, which the launch brief also resolves for itself.
+    // What an unpackaged build resolves, for the live terminal and the one the brief is built for.
     vi.spyOn(runtime, 'getTerminalOrchestrationCliCommand').mockReturnValue('orca-dev')
-    // The worker's brief rides its launch line, so its handle is minted before the spawn.
+    vi.spyOn(runtime, 'predictOrchestrationCliCommandForSpawn').mockResolvedValue('orca-dev')
+    // The brief names the worker's handle, so it is minted before the spawn.
     vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue(TERMINAL_HANDLE)
-    vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
-      id: WORKTREE,
-      path: '/repo/worktree',
-      connectionId: null,
-      repo: null,
-      folderWorkspace: null
-    })
     vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
     vi.spyOn(runtime, 'sendTerminalAgentPrompt').mockResolvedValue({
       handle: TERMINAL_HANDLE,

@@ -43,20 +43,14 @@ describe('orchestration RPC methods', () => {
       vi.spyOn(runtime, 'showManagedTerminalWorkspace').mockResolvedValue({
         id: 'repo::worktree'
       } as never)
-      vi.spyOn(runtime, 'createTerminal').mockResolvedValue({
-        handle: 'term_worker',
-        worktreeId: 'repo::worktree',
-        title: 'worker'
+      // The carry rule's answer on a POSIX host: the brief rides the worker's launch line.
+      vi.spyOn(runtime, 'createTerminal').mockImplementation(async (_selector, options) => {
+        options?.onStartupPromptCarry?.(true)
+        return { handle: 'term_worker', worktreeId: 'repo::worktree', title: 'worker' }
       })
-      // A created worker's brief rides its launch line, so its handle is minted before the spawn.
+      // The brief names the worker's handle and CLI command, so both are settled before the spawn.
       vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue('term_worker')
-      vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
-        id: 'repo::worktree',
-        path: '/repo/worktree',
-        connectionId: null,
-        repo: null,
-        folderWorkspace: null
-      })
+      vi.spyOn(runtime, 'predictOrchestrationCliCommandForSpawn').mockResolvedValue('orca')
       vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
       vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
         handle: 'term_worker',
@@ -162,19 +156,16 @@ describe('orchestration RPC methods', () => {
       expect(db.getWorkerDispatch(result.dispatchId)?.state).toBe('ready')
       // Why: dispatching a worker is background work — surfaceOwner:false adopts
       // the tab without scrolling the sidebar to the worker's workspace.
-      // The brief rides a launch file; argv carries only a pointer to it.
+      // The brief is offered to the launch line through the one carry rule, as main's paste caller.
       expect(runtime.createTerminal).toHaveBeenCalledWith('id:repo::worktree', {
         startupAgent: 'codex',
         launchSource: 'orchestration',
         title: `worker-${task.id}`,
         surfaceOwner: false,
         preAllocatedHandle: 'term_worker',
-        startupPrompt: expect.not.stringContaining('implement worker start'),
-        launchFile: {
-          placeholder: expect.stringMatching(/^orca-launch-file-/),
-          content: expect.stringContaining('implement worker start'),
-          sensitive: true
-        }
+        startupPrompt: expect.stringContaining('implement worker start'),
+        startupPromptPaste: 'once-agent-runs',
+        onStartupPromptCarry: expect.any(Function)
       })
       expect(runtime.observeTerminalLaunchTurnStart).toHaveBeenCalledWith(
         'term_worker',
@@ -322,7 +313,7 @@ describe('orchestration RPC methods', () => {
           warning: 'Terminal term_worker is running but could not be revealed.'
         })
       )
-      expect(runtime.observeTerminalLaunchTurnStart).toHaveBeenCalled()
+      expect(runtime.sendTerminalAgentPrompt).toHaveBeenCalled()
     })
 
     it('starts in an exact existing worktree from a floating coordinator', async () => {
@@ -538,8 +529,7 @@ describe('orchestration RPC methods', () => {
       }
     )
 
-    // Why: agent-first creation types its own launch line, so a brief-carrying agent comes after.
-    it('creates a child worktree, then its brief-carrying agent, with setup run by default', async () => {
+    it('creates a child worktree agent-first with setup run by default', async () => {
       setup()
       mockCurrentWorkerStart()
       vi.mocked(runtime.showManagedWorktree).mockResolvedValue({
@@ -552,6 +542,7 @@ describe('orchestration RPC methods', () => {
       } as never)
       const create = vi.spyOn(runtime, 'createManagedWorktree').mockResolvedValue({
         worktree: { id: 'repo::child', repoId: 'repo' },
+        startupTerminal: { spawned: true, handle: 'term_worker' },
         setupReceipt: {
           requested: 'run',
           hookFound: true,
@@ -597,11 +588,13 @@ describe('orchestration RPC methods', () => {
           name: 'child-worker',
           runHooks: false,
           setupDecision: 'run',
+          startupAgent: 'codex',
+          startupTerminalHandle: 'term_worker',
+          startupPrompt: expect.stringContaining('child worker'),
           activate: false,
           lineage: expect.objectContaining({ parentWorktree: 'repo::parent', noParent: false })
         })
       )
-      expect(create).toHaveBeenCalledWith(expect.not.objectContaining({ startupAgent: 'codex' }))
       expect(result.effects).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ role: 'agent', action: 'created' }),
@@ -609,15 +602,7 @@ describe('orchestration RPC methods', () => {
           expect.objectContaining({ role: 'configured_tab', action: 'created' })
         ])
       )
-      expect(runtime.createTerminal).toHaveBeenCalledWith(
-        'id:repo::child',
-        expect.objectContaining({
-          startupAgent: 'codex',
-          preAllocatedHandle: 'term_worker',
-          launchFile: expect.objectContaining({ sensitive: true })
-        })
-      )
-      expect(runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
+      expect(runtime.createTerminal).not.toHaveBeenCalled()
     })
   })
 })

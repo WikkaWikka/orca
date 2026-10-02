@@ -277,7 +277,8 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
         settings,
         windowsShellOverride: opts.shellOverride
       }),
-      paste: opts.onStartupPromptCarry ? 'when-host-proves-agent' : 'never'
+      paste:
+        opts.startupPromptPaste ?? (opts.onStartupPromptCarry ? 'when-host-proves-agent' : 'never')
     })
     if (!planned) {
       // Why: an explicit agent that yields no plan would otherwise spawn a bare

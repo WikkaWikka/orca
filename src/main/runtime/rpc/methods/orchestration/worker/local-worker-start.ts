@@ -13,11 +13,10 @@ import {
   type WorkerStartModeReceipt
 } from '../../orchestration-worker-start-mode'
 import { EXISTING_WORKTREE_SETUP, placeWorkerAgent } from './worker-start-agent-placement'
-import { awaitStructuredWorkerSetupGate } from './worker-start-structured-setup-gate'
+import { awaitWorkerSetupGate } from './worker-start-setup-gate'
 import { assertOrchestrationWorktreeCreationSupported } from './folder-worktree-placement'
 import type { WorkerStartInput } from './worker-start-schema'
 import {
-  createSetupBeforeAgentGate,
   persistGatedSetupSpawnFailure,
   persistWorkerReadinessStage,
   persistWorkerSetupWaitOutcome,
@@ -28,11 +27,7 @@ import { parseTaskDeps } from './task-deps-argument'
 import { assertExplicitWorkerTerminalUsable } from './explicit-worker-terminal-validation'
 import { recordCreatedWorkerTerminalCustody } from './created-worker-terminal-custody'
 import { tearDownFailedWorkerStart } from './failed-worker-start-teardown'
-import {
-  requireWorkerAuthority,
-  type WorkerEffect,
-  type WorkerSetupReceipt
-} from './worker-topology'
+import { requireWorkerAuthority, type WorkerEffect } from './worker-topology'
 import { prepareLocalWorkerStart } from './worker-start-validation'
 import { deliverAndSettleWorkerStartReadiness } from './worker-start-readiness-settlement'
 import { waitForWorkerStartComposer } from '../../../../launched-agent-composer-readiness'
@@ -146,22 +141,6 @@ export async function startLocalWorker(args: {
   let placed: Awaited<ReturnType<typeof placeWorkerAgent>> | undefined
   let failedStage = 'terminal_create'
   const timeoutMs = params.timeoutMs ?? 60_000
-  let gatedSetupReceipt: WorkerSetupReceipt | undefined
-  let setupGateStartedAt: number | undefined
-  const awaitSetupBeforeAgent = createSetupBeforeAgentGate({
-    runtime,
-    db,
-    dispatchId: started.dispatch.id,
-    effects,
-    timeoutMs,
-    onStage: (stage) => {
-      failedStage = stage
-    },
-    onSetupReceipt: (setup) => {
-      gatedSetupReceipt = setup
-      setupGateStartedAt = Date.now()
-    }
-  })
   try {
     placed = await placeWorkerAgent({
       runtime,
@@ -179,7 +158,6 @@ export async function startLocalWorker(args: {
       onStage: (stage) => {
         failedStage = stage
       },
-      awaitSetupBeforeAgent,
       ...(params.terminal
         ? {}
         : {
@@ -219,15 +197,13 @@ export async function startLocalWorker(args: {
     persistWorkerReadinessStage(setupStage)
 
     failedStage = 'agent_readiness'
-    // A structured session is ready the moment its attach returns ok: there is no boot-to-idle
-    // gap and no terminal title to read an idle edge from. Only the repo's wait-for-setup policy
-    // still holds it back, and that gate has to be waited on explicitly here.
-    // A brief on the launch line needs no idle agent to paste into; its blocking dialogs are
-    // watched during turn observation instead.
-    const wait = placed.launchBrief
-      ? null
-      : structuredSession
-        ? await awaitStructuredWorkerSetupGate({
+    const launchBrief = placed.launchBrief?.carried ? placed.launchBrief : null
+    // A structured session is ready the moment its attach returns ok, and a brief that rode the
+    // launch line needs no idle agent to paste into (its dialogs are watched while its turn is
+    // observed). Only the repo's wait-for-setup policy still holds either back, waited on here.
+    const wait =
+      structuredSession || launchBrief
+        ? await awaitWorkerSetupGate({
             runtime,
             setup: setupReceipt,
             effects,
@@ -251,7 +227,9 @@ export async function startLocalWorker(args: {
             ? `Agent startup blocked: ${describeTerminalWaitBlockedReason(wait.blockedReason)}`
             : structuredSession
               ? `Setup did not finish before the structured worker started (${wait.status}).`
-              : `Agent did not become ready (${wait.status}).`
+              : launchBrief
+                ? `Setup did not finish before the worker's agent started (${wait.status}).`
+                : `Agent did not become ready (${wait.status}).`
         )
       }
     }
@@ -285,8 +263,10 @@ export async function startLocalWorker(args: {
       timeoutMs: params.timeoutMs ?? 60_000,
       effects,
       terminalRevealWarning: placed.warning,
-      launchBrief: placed.launchBrief,
-      launchObservationTimeoutMs: remainingLaunchObservationMs(timeoutMs, setupGateStartedAt),
+      launchBrief,
+      launchObservationTimeoutMs: launchBrief
+        ? remainingLaunchObservationMs(timeoutMs, launchBrief.launchStartedAt)
+        : timeoutMs,
       onStage: (stage) => {
         failedStage = stage
       }
@@ -304,7 +284,7 @@ export async function startLocalWorker(args: {
       dispatchId: started.dispatch.id,
       failedStage,
       error,
-      setup: placed?.setupReceipt ?? gatedSetupReceipt ?? EXISTING_WORKTREE_SETUP,
+      setup: placed?.setupReceipt ?? EXISTING_WORKTREE_SETUP,
       launch: launch.receipt,
       mode
     })

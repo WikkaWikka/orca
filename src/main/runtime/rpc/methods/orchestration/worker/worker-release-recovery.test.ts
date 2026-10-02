@@ -56,15 +56,9 @@ describe('orchestration worker release recovery', () => {
       worktreeId: 'repo::worktree',
       title: 'worker'
     })
+    // The brief names the worker's handle and CLI command, so both are settled before the spawn.
     vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue('term_worker')
-    vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
-      id: 'repo::worktree',
-      path: '/repo/worktree',
-      connectionId: null,
-      repo: null,
-      folderWorkspace: null
-    })
-    vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
+    vi.spyOn(runtime, 'predictOrchestrationCliCommandForSpawn').mockResolvedValue('orca')
     vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
       handle: 'term_worker',
       condition: 'tui-idle',

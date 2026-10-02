@@ -7,9 +7,6 @@ const AGENT_PROMPT_EFFECT_POLL_MS = 50
 
 const HOOK_OBSERVED_TURN_START_AGENTS = new Set<TuiAgent>(['antigravity', 'codex', 'kimi'])
 
-/** Same vocabulary as a worker's turn start: `unobserved` is unverifiable, never "not delivered". */
-export type LaunchTurnStartVerdict = 'observed' | 'permission' | 'unsupported' | 'unobserved'
-
 /** The prompt bytes are written before verification, so this only ever means "not observed". */
 export const AGENT_PROMPT_STALLED_ERROR = 'agent_prompt_stalled'
 

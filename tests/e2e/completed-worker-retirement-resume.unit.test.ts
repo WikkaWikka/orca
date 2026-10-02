@@ -274,16 +274,9 @@ async function releaseCompletedWorker(terminalState: 'running' | 'exited'): Prom
     worktreeId: WORKTREE_ID,
     title: 'PR 4626 unified correction r3'
   })
-  // The worker's brief rides its launch line, so its handle is minted before the spawn.
+  // The brief names the worker's handle and CLI command, so both are settled before the spawn.
   vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue(TERMINAL_HANDLE)
-  vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
-    id: WORKTREE_ID,
-    path: '/repo/worktree',
-    connectionId: null,
-    repo: null,
-    folderWorkspace: null
-  })
-  vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
+  vi.spyOn(runtime, 'predictOrchestrationCliCommandForSpawn').mockResolvedValue('orca')
   vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
     handle: TERMINAL_HANDLE,
     condition: 'tui-idle',

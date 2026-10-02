@@ -3,12 +3,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ORCHESTRATION_CONTRACT_VERSION } from '../../../../../../shared/protocol-version'
-import { getAppEnvironment } from '../../../../../../shared/app-environment'
 import { OrcaRuntimeService } from '../../../../orca-runtime'
 import { OrchestrationDb } from '../../../../orchestration/db'
 import { RpcDispatcher } from '../../../dispatcher'
 import type { RpcRequest } from '../../../core'
 import { ORCHESTRATION_METHODS } from '../../orchestration'
+import {
+  createNewWorktreeWorkerFixture,
+  type NewWorktreeWorkerFixture
+} from './workers-new-worktree.test-support'
 
 describe('orchestration new-worktree workers', () => {
   type CreateWorktreeResult = Awaited<ReturnType<OrcaRuntimeService['createManagedWorktree']>>
@@ -16,78 +19,11 @@ describe('orchestration new-worktree workers', () => {
   let db: OrchestrationDb
   let runtime: OrcaRuntimeService
   let runId: string
+  let startWorker: NewWorktreeWorkerFixture['startWorker']
   const paths: string[] = []
 
   beforeEach(() => {
-    db = new OrchestrationDb(':memory:')
-    runtime = new OrcaRuntimeService()
-    runtime.setOrchestrationDb(db)
-    runId = db.createRun({
-      objective: 'Test new-worktree workers',
-      coordinatorHandle: 'term_coord',
-      coordinatorPaneKey
-    }).id
-    vi.spyOn(runtime, 'getTerminalPaneKey').mockImplementation((handle) =>
-      handle === 'term_coord'
-        ? coordinatorPaneKey
-        : handle === 'term_worker'
-          ? 'tab_worker:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
-          : null
-    )
-    vi.spyOn(runtime, 'getTerminalProcessIncarnation').mockImplementation((handle) =>
-      handle === 'term_worker' ? 'runtime_test:term_worker:1' : null
-    )
-    vi.spyOn(runtime, 'validateOrchestrationAgentLauncher').mockImplementation(() => {})
-    vi.spyOn(runtime, 'showTerminal').mockResolvedValue({
-      handle: 'term_coord',
-      worktreeId: 'repo::parent',
-      status: 'running'
-    } as never)
-    vi.spyOn(runtime, 'showManagedWorktree').mockResolvedValue({
-      id: 'repo::parent',
-      repoId: 'repo'
-    } as never)
-    vi.spyOn(runtime, 'showRepo').mockResolvedValue({
-      id: 'repo',
-      kind: 'git'
-    } as never)
-    vi.spyOn(runtime, 'createTerminal').mockResolvedValue({
-      handle: 'term_worker',
-      worktreeId: 'repo::created',
-      title: 'worker'
-    })
-    // A created worker's brief rides its launch line, so its handle is minted before the spawn.
-    vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue('term_worker')
-    vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
-      id: 'repo::created',
-      path: '/repo/created',
-      connectionId: null,
-      repo: null,
-      folderWorkspace: null
-    })
-    vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
-    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: only the fields worker-start reads are listed.
-    vi.spyOn(runtime, 'listTerminals').mockResolvedValue({
-      terminals: [],
-      totalCount: 0,
-      truncated: false
-    } as never)
-    vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
-      handle: 'term_worker',
-      condition: 'tui-idle',
-      satisfied: true,
-      status: 'running',
-      exitCode: null
-    })
-    vi.spyOn(runtime, 'waitForSetupTerminalCompletion').mockReturnValue(
-      new Promise(() => undefined)
-    )
-    vi.spyOn(runtime, 'getTerminalOrchestrationCliCommand').mockReturnValue('orca')
-    vi.spyOn(runtime, 'sendTerminalAgentPrompt').mockResolvedValue({
-      handle: 'term_worker',
-      accepted: true,
-      bytesWritten: 1
-    })
+    ;({ db, runtime, runId, startWorker } = createNewWorktreeWorkerFixture(coordinatorPaneKey))
   })
 
   afterEach(() => {
@@ -96,26 +32,6 @@ describe('orchestration new-worktree workers', () => {
       rmSync(path, { recursive: true, force: true })
     }
   })
-
-  async function startWorker(overrides: Record<string, unknown> = {}) {
-    const task = db.createTask({ spec: 'new-worktree task', runId })
-    const method = ORCHESTRATION_METHODS.find(
-      (candidate) => candidate.name === 'orchestration.workerStart'
-    )
-    if (!method) {
-      throw new Error('workerStart method is not registered')
-    }
-    const params = method.params!.parse({
-      task: task.id,
-      from: 'term_coord',
-      worktree: 'new-child',
-      name: 'new-worker',
-      agent: 'codex',
-      ...overrides
-    })
-    const result = await method.handler(params, { runtime })
-    return { result, task }
-  }
 
   function mockCreatedWorktree(options?: {
     hookFound?: boolean
@@ -126,46 +42,37 @@ describe('orchestration new-worktree workers', () => {
   }) {
     const hookFound = options?.hookFound ?? true
     const state = options?.state ?? (hookFound ? 'running' : 'not_configured')
-    vi.spyOn(runtime, 'createManagedWorktree').mockImplementation(async (args) => {
-      // Only agent-first creation spawns, and so lists, the agent's own terminal.
-      const terminals = (options?.terminals ?? [{ handle: 'term_worker', title: 'Codex' }]).filter(
-        (terminal) => args.startupAgent || terminal.handle !== 'term_worker'
-      )
-      // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: only the fields worker-start reads are listed.
+    vi.spyOn(runtime, 'createManagedWorktree').mockResolvedValue({
+      worktree: { id: 'repo::created', repoId: 'repo' },
+      startupTerminal: { spawned: true, handle: 'term_worker' },
+      setupReceipt: {
+        requested: state === 'skipped' ? 'skip' : 'run',
+        hookFound,
+        startupPolicy: options?.startupPolicy ?? 'start-immediately',
+        state,
+        terminalHandle:
+          options?.setupTerminalHandle ??
+          options?.terminals?.find((terminal) => terminal.title === 'Setup')?.handle
+      }
+    } as never)
+    if (options?.terminals) {
       vi.mocked(runtime.listTerminals).mockResolvedValue({
-        terminals,
-        totalCount: terminals.length,
+        terminals: options.terminals,
+        totalCount: options.terminals.length,
         truncated: false
       } as never)
-      // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: only the fields worker-start reads are returned.
-      return {
-        worktree: { id: 'repo::created', repoId: 'repo' },
-        ...(args.startupAgent ? { startupTerminal: { spawned: true, handle: 'term_worker' } } : {}),
-        setupReceipt: {
-          requested: state === 'skipped' ? 'skip' : 'run',
-          hookFound,
-          startupPolicy: options?.startupPolicy ?? 'start-immediately',
-          state,
-          terminalHandle:
-            options?.setupTerminalHandle ??
-            options?.terminals?.find((terminal) => terminal.title === 'Setup')?.handle
-        }
-      } as never
-    })
+    }
   }
 
-  // Why: agent-first creation types its own launch line, so a brief-carrying agent comes after.
-  it('creates an independent top-level worktree, then its brief-carrying agent', async () => {
+  it('creates an independent top-level worktree and reuses its agent terminal', async () => {
     mockCreatedWorktree()
 
     const { result } = await startWorker({ worktree: 'new-top-level' })
 
     expect(runtime.createManagedWorktree).toHaveBeenCalledWith(
-      expect.not.objectContaining({ startupAgent: expect.anything() })
-    )
-    expect(runtime.createManagedWorktree).toHaveBeenCalledWith(
       expect.objectContaining({
-        createdWithAgent: 'codex',
+        startupAgent: 'codex',
+        startupLaunchSource: 'orchestration',
         awaitTerminalProvisioning: true,
         observeSetupCompletion: true,
         lineage: expect.objectContaining({ noParent: true, parentWorktree: undefined })
@@ -188,35 +95,10 @@ describe('orchestration new-worktree workers', () => {
         })
       ])
     )
-    expect(runtime.createTerminal).toHaveBeenCalledWith(
-      'id:repo::created',
-      expect.objectContaining({
-        startupAgent: 'codex',
-        launchSource: 'orchestration',
-        preAllocatedHandle: 'term_worker',
-        launchFile: expect.objectContaining({
-          content: expect.stringContaining('new-worktree task'),
-          sensitive: true
-        })
-      })
-    )
-    expect(runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
-  })
-
-  it('still creates a paste-only agent worktree agent-first and reuses its terminal', async () => {
-    mockCreatedWorktree()
-
-    const { result } = await startWorker({ worktree: 'new-top-level', agent: 'aider' })
-
-    expect(runtime.createManagedWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({ startupAgent: 'aider', startupLaunchSource: 'orchestration' })
-    )
-    expect(result).toMatchObject({ state: 'ready' })
     expect(runtime.createTerminal).not.toHaveBeenCalled()
-    expect(runtime.sendTerminalAgentPrompt).toHaveBeenCalledOnce()
   })
 
-  it('passes launch preferences to the brief-carrying agent terminal', async () => {
+  it('passes launch preferences into agent-first worktree creation', async () => {
     mockCreatedWorktree()
 
     const { result } = await startWorker({
@@ -224,11 +106,10 @@ describe('orchestration new-worktree workers', () => {
       effort: 'high'
     })
 
-    expect(runtime.createTerminal).toHaveBeenCalledWith(
-      'id:repo::created',
+    expect(runtime.createManagedWorktree).toHaveBeenCalledWith(
       expect.objectContaining({
         startupAgent: 'codex',
-        launchPreferences: { model: 'custom-codex-model', effort: 'high' }
+        startupLaunchPreferences: { model: 'custom-codex-model', effort: 'high' }
       })
     )
     expect(result).toMatchObject({
@@ -278,30 +159,10 @@ describe('orchestration new-worktree workers', () => {
   it('injects the execution host CLI command without a Dispatch capability', async () => {
     mockCreatedWorktree()
     vi.mocked(runtime.getTerminalOrchestrationCliCommand).mockReturnValue('orca-ide')
-    // The host writes a WSL agent's launch file into the distro, so its brief rides one too.
-    vi.spyOn(runtime, 'resolveProjectRuntimeForWorktree').mockReturnValue({
-      status: 'resolved',
-      runtime: {
-        kind: 'wsl',
-        hostPlatform: 'wsl',
-        projectId: 'repo',
-        distro: 'Ubuntu',
-        reason: 'global-default',
-        cacheKey: 'wsl:Ubuntu'
-      }
-    })
 
-    // A dev build names `orca-dev` everywhere; the host's own command shows only when packaged.
-    const packaged = vi.spyOn(getAppEnvironment(), 'isPackaged').mockReturnValue(true)
-    try {
-      await startWorker({ worktree: 'new-top-level' })
-    } finally {
-      packaged.mockRestore()
-    }
+    await startWorker({ worktree: 'new-top-level' })
 
-    const createOptions = vi.mocked(runtime.createTerminal).mock.calls[0]?.[1]
-    const prompt = createOptions?.launchFile?.content ?? ''
-    expect(runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
+    const prompt = vi.mocked(runtime.sendTerminalAgentPrompt).mock.calls[0]?.[1] ?? ''
     expect(prompt).toContain('orca-ide orchestration send')
     expect(prompt).not.toMatch(/(^|\s)orca orchestration send/)
   })
@@ -406,8 +267,7 @@ describe('orchestration new-worktree workers', () => {
         expect.objectContaining({ kind: 'dispatch_input', state: 'accepted' })
       ])
     )
-    expect(runtime.observeTerminalLaunchTurnStart).toHaveBeenCalledOnce()
-    expect(runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
+    expect(runtime.sendTerminalAgentPrompt).toHaveBeenCalledOnce()
     expect(db.getInbox(10).filter((message) => message.run_id === runId)).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'status', priority: 'high' })])
     )
@@ -438,43 +298,8 @@ describe('orchestration new-worktree workers', () => {
     })
   })
 
-  // Why: setup and the launched brief's turn start share the start's one budget, never T + T.
-  it.each([
-    [20_000, 40_000],
-    [50_000, 30_000]
-  ])(
-    'after %i ms of setup, observes the launched turn for what is left (%i ms, never under 30 s)',
-    async (setupMs, observationMs) => {
-      mockCreatedWorktree({
-        startupPolicy: 'wait-for-setup',
-        state: 'running',
-        setupTerminalHandle: 'term_setup'
-      })
-      let now = 1_000_000
-      vi.spyOn(Date, 'now').mockImplementation(() => now)
-      vi.mocked(runtime.waitForSetupTerminalCompletion).mockImplementation(async () => {
-        now += setupMs
-        return { exitCode: 0 }
-      })
-
-      await startWorker({ timeoutMs: 60_000 })
-
-      expect(runtime.observeTerminalLaunchTurnStart).toHaveBeenCalledWith(
-        'term_worker',
-        expect.anything(),
-        observationMs,
-        expect.any(AbortSignal)
-      )
-    }
-  )
-
-  it('records wait-for-setup success before the agent terminal is created', async () => {
-    mockCreatedWorktree({
-      startupPolicy: 'wait-for-setup',
-      state: 'running',
-      setupTerminalHandle: 'term_setup'
-    })
-    vi.mocked(runtime.waitForSetupTerminalCompletion).mockResolvedValue({ exitCode: 0 })
+  it('records wait-for-setup success before task input is accepted', async () => {
+    mockCreatedWorktree({ startupPolicy: 'wait-for-setup', state: 'running' })
 
     const { result } = await startWorker()
     const dispatchId = (result as { dispatchId: string }).dispatchId
@@ -487,10 +312,9 @@ describe('orchestration new-worktree workers', () => {
         expect.objectContaining({ kind: 'dispatch_input', state: 'accepted' })
       ])
     })
-    expect(runtime.waitForSetupTerminalCompletion).toHaveBeenCalledWith('term_setup')
-    expect(
-      vi.mocked(runtime.waitForSetupTerminalCompletion).mock.invocationCallOrder[0]
-    ).toBeLessThan(vi.mocked(runtime.createTerminal).mock.invocationCallOrder[0]!)
+    expect(vi.mocked(runtime.waitForTerminal).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runtime.sendTerminalAgentPrompt).mock.invocationCallOrder[0]!
+    )
     expect(JSON.parse(db.getWorkerDispatch(dispatchId)?.effects ?? '[]')).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: 'dispatch_input', state: 'accepted' })
@@ -499,13 +323,12 @@ describe('orchestration new-worktree workers', () => {
   })
 
   // Why: a first dispatch the composer signal settles must record setup exactly as one the idle
-  // wait settles; the composer lane once returned nothing and skipped this record. Paste-only:
-  // a brief-carrying agent waits on no readiness before its turn.
+  // wait settles; the composer lane once returned nothing and skipped this record.
   it('settles a fresh worker start on main’s idle wait, not the launch paste’s signal', async () => {
     mockCreatedWorktree({ startupPolicy: 'wait-for-setup', state: 'running' })
     const composerSignal = vi.spyOn(runtime, 'waitForFreshWorkerComposer')
 
-    const { result } = await startWorker({ agent: 'aider' })
+    const { result } = await startWorker()
 
     expect(composerSignal).not.toHaveBeenCalled()
     expect(runtime.waitForTerminal).toHaveBeenCalledWith(
@@ -518,8 +341,15 @@ describe('orchestration new-worktree workers', () => {
     })
   })
 
-  it('does not start the agent when the gated setup terminal fails to start', async () => {
+  it('does not inject task input when the gated setup terminal fails to start', async () => {
     mockCreatedWorktree({ startupPolicy: 'wait-for-setup', state: 'spawn_failed' })
+    vi.mocked(runtime.waitForTerminal).mockResolvedValue({
+      handle: 'term_worker',
+      condition: 'tui-idle',
+      satisfied: false,
+      status: 'exited',
+      exitCode: 1
+    })
 
     const { result, task } = await startWorker()
 
@@ -532,16 +362,18 @@ describe('orchestration new-worktree workers', () => {
       ])
     })
     expect(db.getTask(task.id)?.status).toBe('failed')
-    expect(runtime.createTerminal).not.toHaveBeenCalled()
+    expect(runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
   })
 
-  it('does not start the agent when the gated setup script fails', async () => {
-    mockCreatedWorktree({
-      startupPolicy: 'wait-for-setup',
-      state: 'running',
-      setupTerminalHandle: 'term_setup'
+  it('does not inject task input when the gated setup script fails', async () => {
+    mockCreatedWorktree({ startupPolicy: 'wait-for-setup', state: 'running' })
+    vi.mocked(runtime.waitForTerminal).mockResolvedValue({
+      handle: 'term_worker',
+      condition: 'tui-idle',
+      satisfied: false,
+      status: 'exited',
+      exitCode: 1
     })
-    vi.mocked(runtime.waitForSetupTerminalCompletion).mockResolvedValue({ exitCode: 1 })
 
     const { result } = await startWorker()
 
@@ -551,58 +383,28 @@ describe('orchestration new-worktree workers', () => {
       setup: { state: 'failed' },
       effects: expect.arrayContaining([expect.objectContaining({ kind: 'setup', state: 'failed' })])
     })
-    expect(runtime.createTerminal).not.toHaveBeenCalled()
+    expect(runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
   })
 
   it('does not mislabel a wait-for-setup timeout as setup failure', async () => {
-    mockCreatedWorktree({
-      startupPolicy: 'wait-for-setup',
-      state: 'running',
-      setupTerminalHandle: 'term_setup'
+    mockCreatedWorktree({ startupPolicy: 'wait-for-setup', state: 'running' })
+    vi.mocked(runtime.waitForTerminal).mockResolvedValue({
+      handle: 'term_worker',
+      condition: 'tui-idle',
+      satisfied: false,
+      status: 'running',
+      exitCode: null
     })
 
-    const { result } = await startWorker({ timeoutMs: 1 })
+    const { result } = await startWorker()
 
     expect(result).toMatchObject({
       state: 'failed',
-      failedStage: 'setup_wait',
-      lastError: expect.stringContaining('(timeout)'),
-      setup: { state: 'running' },
-      effects: expect.arrayContaining([
-        expect.objectContaining({ kind: 'setup', state: 'running' })
-      ])
+      failedStage: 'agent_readiness',
+      setup: { state: 'running' }
     })
-    expect(runtime.createTerminal).not.toHaveBeenCalled()
+    expect(runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
   })
-
-  // A paste-only agent is still created agent-first, so its readiness wait carries setup's gate.
-  it.each([
-    ['running', true, 'exited', 'ready', undefined, 'succeeded'],
-    ['spawn_failed', false, 'exited', 'failed', 'setup_start', 'spawn_failed'],
-    ['running', false, 'exited', 'failed', 'setup_wait', 'failed'],
-    ['running', false, 'running', 'failed', 'agent_readiness', 'running']
-  ] as const)(
-    'gates an agent-first %s setup (idle=%s, %s) off the paste worker readiness wait',
-    async (setupState, satisfied, status, state, failedStage, finalSetupState) => {
-      mockCreatedWorktree({ startupPolicy: 'wait-for-setup', state: setupState })
-      vi.mocked(runtime.waitForTerminal).mockResolvedValue({
-        handle: 'term_worker',
-        condition: 'tui-idle',
-        satisfied,
-        status,
-        exitCode: null
-      })
-
-      const { result } = await startWorker({ agent: 'aider' })
-
-      expect(result).toMatchObject({
-        state,
-        ...(failedStage ? { failedStage } : {}),
-        setup: { startupPolicy: 'wait-for-setup', state: finalSetupState }
-      })
-      expect(runtime.sendTerminalAgentPrompt).toHaveBeenCalledTimes(state === 'ready' ? 1 : 0)
-    }
-  )
 
   it('distinguishes no-effect failure, unknown acceptance, and durable residual effects', async () => {
     vi.spyOn(runtime, 'createManagedWorktree').mockRejectedValueOnce(
@@ -630,20 +432,17 @@ describe('orchestration new-worktree workers', () => {
     })
 
     mockCreatedWorktree()
-    // A startup dialog holds the launch turn: unknown, since answering it runs the brief.
-    vi.mocked(runtime.observeTerminalLaunchTurnStart).mockReturnValueOnce(new Promise(() => {}))
     vi.mocked(runtime.waitForTerminal).mockResolvedValueOnce({
       handle: 'term_worker',
       condition: 'tui-idle',
       satisfied: false,
-      status: 'running',
-      exitCode: null,
-      blockedReason: 'agent-trust-workspace'
+      status: 'exited',
+      exitCode: 1
     })
     const durableEffect = await startWorker({ name: 'durable-effect' })
     expect(durableEffect.result).toMatchObject({
-      state: 'outcome_unknown',
-      stage: 'turn_start_blocked',
+      state: 'failed',
+      failedStage: 'agent_readiness',
       effects: expect.arrayContaining([
         expect.objectContaining({ kind: 'worktree', id: 'repo::created' }),
         expect.objectContaining({ kind: 'terminal', id: 'term_worker' })
@@ -718,6 +517,7 @@ describe('orchestration new-worktree workers', () => {
 
     finishCreate?.({
       worktree: { id: 'repo::created', repoId: 'repo' },
+      startupTerminal: { spawned: true, handle: 'term_worker' },
       setupReceipt: {
         requested: 'run',
         hookFound: false,
@@ -762,8 +562,7 @@ describe('orchestration new-worktree workers', () => {
         from: 'term_coord',
         worktree: 'new-child',
         name: 'recover-input-worker',
-        // Only a paste can fail at dispatch input; aider takes its brief after start.
-        agent: 'aider'
+        agent: 'codex'
       }
     }
 
@@ -832,20 +631,22 @@ describe('orchestration new-worktree workers', () => {
 
   it('persists pre-effect, post-effect, and post-input stages in order', async () => {
     mockCreatedWorktree({ hookFound: false })
-    let finishTerminal:
-      | ((value: Awaited<ReturnType<OrcaRuntimeService['createTerminal']>>) => void)
+    let finishWait:
+      | ((value: Awaited<ReturnType<OrcaRuntimeService['waitForTerminal']>>) => void)
       | undefined
-    let finishTurn: ((value: 'observed') => void) | undefined
-    vi.mocked(runtime.createTerminal).mockImplementationOnce(
+    let finishPrompt:
+      | ((value: Awaited<ReturnType<OrcaRuntimeService['sendTerminalAgentPrompt']>>) => void)
+      | undefined
+    vi.mocked(runtime.waitForTerminal).mockImplementationOnce(
       async () =>
         await new Promise((resolve) => {
-          finishTerminal = resolve
+          finishWait = resolve
         })
     )
-    vi.mocked(runtime.observeTerminalLaunchTurnStart).mockImplementationOnce(
+    vi.mocked(runtime.sendTerminalAgentPrompt).mockImplementationOnce(
       async () =>
         await new Promise((resolve) => {
-          finishTurn = resolve
+          finishPrompt = resolve
         })
     )
 
@@ -855,8 +656,9 @@ describe('orchestration new-worktree workers', () => {
       const dispatch = task ? db.getDispatchContext(task.id) : undefined
       expect(dispatch && db.getWorkerDispatch(dispatch.id)).toMatchObject({
         state: 'starting',
-        stage: 'terminal_creating',
-        worktree_id: 'repo::created'
+        stage: 'terminal_readying',
+        worktree_id: 'repo::created',
+        agent_terminal_handle: 'term_worker'
       })
     })
     const dispatch = db.getDispatchContext(db.listTasks()[0]!.id)!
@@ -864,16 +666,21 @@ describe('orchestration new-worktree workers', () => {
       expect.arrayContaining([expect.objectContaining({ kind: 'worktree', id: 'repo::created' })])
     )
 
-    finishTerminal?.({ handle: 'term_worker', worktreeId: 'repo::created', title: 'worker' })
+    finishWait?.({
+      handle: 'term_worker',
+      condition: 'tui-idle',
+      satisfied: true,
+      status: 'running',
+      exitCode: null
+    })
     await vi.waitFor(() =>
       expect(db.getWorkerDispatch(dispatch.id)).toMatchObject({
         state: 'starting',
-        stage: 'authority_attached',
-        agent_terminal_handle: 'term_worker'
+        stage: 'authority_attached'
       })
     )
 
-    finishTurn?.('observed')
+    finishPrompt?.({ handle: 'term_worker', accepted: true, bytesWritten: 1 })
     await expect(pending).resolves.toMatchObject({
       result: { state: 'ready', stage: 'input_accepted' }
     })

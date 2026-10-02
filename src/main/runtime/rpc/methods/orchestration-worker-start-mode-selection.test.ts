@@ -86,15 +86,9 @@ describe('worker-start honours the settings default', () => {
       exitCode: null
     })
     vi.spyOn(runtime, 'getTerminalOrchestrationCliCommand').mockReturnValue('orca')
-    // The worker's brief rides its launch line, so its handle is minted before the spawn.
+    // The brief names the worker's handle and CLI command, so both are settled before the spawn.
     vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue(TERMINAL_HANDLE)
-    vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
-      id: 'repo::wt',
-      path: '/repo/worktree',
-      connectionId: null,
-      repo: null,
-      folderWorkspace: null
-    })
+    vi.spyOn(runtime, 'predictOrchestrationCliCommandForSpawn').mockResolvedValue('orca')
     vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
     vi.spyOn(runtime, 'sendTerminalAgentPrompt').mockResolvedValue({
       handle: TERMINAL_HANDLE,
@@ -243,7 +237,7 @@ describe('worker-start honours the settings default', () => {
     expect(createExistingWorktreeWorkerTerminal).not.toHaveBeenCalled()
   })
 
-  it('creates the new worktree, then its terminal worker with the brief on the launch line', async () => {
+  it('still creates the new worktree agent-first when the default is a terminal worker', async () => {
     const created = mockWorktreeCreation()
 
     const result = await startWorker(
@@ -252,9 +246,7 @@ describe('worker-start honours the settings default', () => {
     )
 
     expect(result).toMatchObject({ state: 'ready', mode: { mode: 'terminal' } })
-    // Why: the brief needs the created worktree's setup gate first, so no agent-first terminal.
-    expect(created).toHaveBeenCalledWith(expect.not.objectContaining({ startupAgent: 'claude' }))
-    expect(createExistingWorktreeWorkerTerminal).toHaveBeenCalledTimes(1)
+    expect(created).toHaveBeenCalledWith(expect.objectContaining({ startupAgent: 'claude' }))
     expect(createStructuredWorkerSessionForWorktree).not.toHaveBeenCalled()
   })
 

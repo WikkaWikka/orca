@@ -37,6 +37,8 @@ export type OrchestrationWorkerReleaseHarness = {
     options?: WorkerStartOptions
   ) => Promise<{ taskId: string; dispatchId: string }>
   deferred: typeof deferred
+  /** The carry rule's answer on a host whose line cannot carry the brief (a Windows shell). */
+  leaveBriefForPaste: () => void
   coordinatorPaneKey: string
   workerPaneKey: string
   readonly db: OrchestrationDb
@@ -94,20 +96,11 @@ export function createOrchestrationWorkerReleaseHarness(): OrchestrationWorkerRe
     vi.spyOn(runtime, 'showManagedTerminalWorkspace').mockResolvedValue({
       id: 'repo::worktree'
     } as never)
-    vi.spyOn(runtime, 'createTerminal').mockResolvedValue({
-      handle: 'term_worker',
-      worktreeId: 'repo::worktree',
-      title: 'worker'
-    })
-    // The worker's brief rides its launch line, so its handle is minted before the spawn.
+    // The carry rule's answer on a POSIX host: the brief rides the worker's launch line.
+    carryBrief(true)
+    // The brief names the worker's handle and CLI command, so both are settled before the spawn.
     vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue('term_worker')
-    vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
-      id: 'repo::worktree',
-      path: '/repo/worktree',
-      connectionId: null,
-      repo: null,
-      folderWorkspace: null
-    })
+    vi.spyOn(runtime, 'predictOrchestrationCliCommandForSpawn').mockResolvedValue('orca')
     vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
     vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
       handle: 'term_worker',
@@ -202,6 +195,13 @@ export function createOrchestrationWorkerReleaseHarness(): OrchestrationWorkerRe
     return worker
   }
 
+  function carryBrief(carried: boolean): void {
+    vi.spyOn(runtime, 'createTerminal').mockImplementation(async (_selector, options) => {
+      options?.onStartupPromptCarry?.(carried)
+      return { handle: 'term_worker', worktreeId: 'repo::worktree', title: 'worker' }
+    })
+  }
+
   return {
     setup,
     cleanup,
@@ -210,6 +210,7 @@ export function createOrchestrationWorkerReleaseHarness(): OrchestrationWorkerRe
     settle,
     startSettledWorker,
     deferred,
+    leaveBriefForPaste: () => carryBrief(false),
     coordinatorPaneKey,
     workerPaneKey,
     get db() {

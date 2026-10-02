@@ -4,8 +4,7 @@ import type { RuntimeLeafRecord, RuntimePtyWorktreeRecord } from './runtime-term
 import type { TerminalHandleRecord } from './runtime-terminal-contracts'
 import type {
   AgentPromptTurnStartEvidence,
-  AgentPromptWaitTextCache,
-  LaunchTurnStartVerdict
+  AgentPromptWaitTextCache
 } from './agent-prompt-submission-verification'
 import {
   isTerminalSendSettlementAgent,
@@ -13,6 +12,11 @@ import {
 } from './agent-prompt-submission-verification'
 import type { TuiAgent } from '../../shared/tui-agent'
 import { AgentPromptRequestCorrelation } from './agent-prompt-request-correlation'
+import type { LaunchedAgentForeground } from './launched-agent-foreground'
+import {
+  observeLaunchTurnStart,
+  type LaunchTurnStartVerdict
+} from './launch-turn-start-observation'
 
 export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWithSerializeAgentPromptSubmission {
   private readonly agentPromptCorrelation = new AgentPromptRequestCorrelation()
@@ -24,6 +28,10 @@ export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWit
     record: TerminalHandleRecord
     leaf: RuntimeLeafRecord
   }
+  declare readLaunchedAgentForeground: (
+    ptyId: string,
+    agent: TuiAgent
+  ) => Promise<LaunchedAgentForeground>
 
   getTerminalPromptRequestBinding(handle: string): {
     ptyId: string
@@ -102,9 +110,10 @@ export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWit
   }
 
   /**
-   * Whether a prompt that rode an agent's launch command line started a turn. Only a hook event
-   * that carried an explicit prompt after `launchStartedAt` counts: a spinner title, a prompt-less
-   * SessionStart or output bytes prove nothing about the prompt.
+   * Whether a prompt that rode an agent's launch command line started a turn. The hook proof counts
+   * only an event that carried an explicit prompt after `launchStartedAt`: a spinner title, a
+   * prompt-less SessionStart or output bytes prove nothing about the prompt. Where hooks cannot give
+   * that proof, or never reach the pane, the launch's own evidence decides (`observeLaunchTurnStart`).
    */
   async observeTerminalLaunchTurnStart(
     handle: string,
@@ -112,15 +121,41 @@ export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWit
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<LaunchTurnStartVerdict> {
-    if (!isTerminalSendSettlementAgent(launch.agent)) {
-      return 'unsupported'
-    }
     const { ptyId } = this.getTerminalPromptRequestBinding(handle)
+    const agent = launch.agent
+    const hooksProveTurn =
+      isTerminalSendSettlementAgent(agent) &&
+      this.store?.getSettings().agentStatusHooksEnabled !== false
+    return observeLaunchTurnStart(
+      {
+        ...(hooksProveTurn
+          ? {
+              observeHookTurn: (stop) =>
+                this.observeLaunchHookTurn(handle, ptyId, launch.launchStartedAt, timeoutMs, stop)
+            }
+          : {}),
+        hookReachedPane: () => this.getFreshExplicitAgentStatusForPty(handle, ptyId) !== null,
+        readWorkingSequence: () => this.getAgentPromptActivity(handle, ptyId).workingSequence,
+        launchRecorded: () => Boolean(this.ptysById.get(ptyId)?.launchAgent),
+        readForeground: async () =>
+          agent ? await this.readLaunchedAgentForeground(ptyId, agent) : 'unknown'
+      },
+      { launchStartedAt: launch.launchStartedAt, timeoutMs, ...(signal ? { signal } : {}) }
+    )
+  }
+
+  private async observeLaunchHookTurn(
+    handle: string,
+    ptyId: string,
+    launchStartedAt: number,
+    timeoutMs: number,
+    signal: AbortSignal
+  ): Promise<'observed' | 'permission' | 'unobserved'> {
     try {
       await verifyAgentPromptSubmission({
         baseline: {
           ...this.getAgentPromptActivity(handle, ptyId),
-          explicitPromptStartedAt: launch.launchStartedAt
+          explicitPromptStartedAt: launchStartedAt
         },
         readActivity: () => this.getAgentPromptActivity(handle, ptyId),
         explicitPromptOnly: true,
@@ -129,15 +164,9 @@ export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWit
       })
       return 'observed'
     } catch (error) {
-      const message = error instanceof Error ? error.message : ''
-      if (message === 'agent_prompt_blocked') {
-        return 'permission'
-      }
-      // Why: a replaced PTY leaves the launch unproven, not failed.
-      if (message === 'agent_prompt_stalled' || message === 'terminal_handle_stale') {
-        return 'unobserved'
-      }
-      throw error
+      return error instanceof Error && error.message === 'agent_prompt_blocked'
+        ? 'permission'
+        : 'unobserved'
     }
   }
 

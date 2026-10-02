@@ -1,13 +1,12 @@
 import { AGENT_PROMPT_EFFECT_TIMEOUT_MS } from '../../../../../../shared/orchestration-timing-budgets'
 import type {
   RuntimeTerminalPromptDelivery,
-  RuntimeTerminalWait,
   RuntimeTerminalWaitBlockedReason
 } from '../../../../../../shared/runtime-terminal-contracts'
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
 import type { TuiAgent } from '../../../../../../shared/tui-agent'
 import { describeTerminalWaitBlockedReason } from '../../../../../../shared/terminal-wait-blocked-reason-legacy-alias'
-import { waitForWorkerStartComposer } from '../../../../launched-agent-composer-readiness'
+import type { LaunchTurnStartVerdict } from '../../../../launch-turn-start-observation'
 
 /**
  * Turn-start verdict for a dispatched worker prompt, in the execution-boundary vocabulary:
@@ -98,12 +97,16 @@ export function describeUnobservedWorkerTurnStart(agent: string | null): string 
 
 /** Pause before re-arming a dialog watch that found the agent idle; an idle screen re-reads instantly. */
 const STARTUP_DIALOG_REWATCH_MS = 500
+/** Past the 1.5 s quiet a dialog needs to read as one, so a dialog already painting is caught. */
+const STARTUP_DIALOG_SETTLE_MS = 2_000
 
 /**
- * Turn-start verdict for a worker whose brief rode its launch command line. Only a hook turn that
- * carried an explicit prompt after the spawn counts. A startup dialog that blocks the agent is
- * reported as blocked but not failed: the brief is already on the agent's command line, so the
- * agent runs it once the dialog is answered, and its report then settles the dispatch.
+ * Turn-start verdict for a worker whose brief rode its launch command line. The agent's hook turn
+ * that carried an explicit prompt after the spawn is the proof; where hooks give none, the launch's
+ * own evidence (`observeLaunchTurnStart`). A startup dialog that blocks the agent is reported as
+ * blocked but not failed: the brief is already on the agent's command line, so the agent runs it
+ * once the dialog is answered, and its report then settles the dispatch. An agent the host proves
+ * exited at startup fails the start, as a pasted brief's readiness wait did.
  */
 export async function observeWorkerLaunchTurnStart(args: {
   runtime: OrcaRuntimeService
@@ -123,7 +126,7 @@ export async function observeWorkerLaunchTurnStart(args: {
         timeoutMs,
         controller.signal
       )
-      .catch((): WorkerTurnStartVerdict => 'unobserved')
+      .catch((): LaunchTurnStartVerdict => 'unobserved')
     const dialog = watchForStartupDialog(runtime, terminalHandle, deadline, controller.signal)
     const first = await Promise.race([
       observed.then((verdict) => ({ verdict, blockedReason: null })),
@@ -133,12 +136,16 @@ export async function observeWorkerLaunchTurnStart(args: {
       return blockedLaunchObservation(first.blockedReason)
     }
     const verdict = first.verdict ?? (await observed)
+    if (verdict === 'exited') {
+      throw new Error('Agent exited before its first turn started; the shell is back in front.')
+    }
     if (verdict === 'observed') {
       return { verdict }
     }
     if (verdict === 'unsupported') {
-      controller.abort()
-      return await awaitUnsupportedLaunchReadiness(runtime, terminalHandle, args.agent, deadline)
+      // Why: an agent proven in front can still be held by a dialog that has not settled on screen.
+      const blockedReason = await settledWithin(dialog, STARTUP_DIALOG_SETTLE_MS)
+      return blockedReason ? blockedLaunchObservation(blockedReason) : { verdict }
     }
     // Why: a dialog already on screen outranks any verdict short of an observed turn.
     const blockedReason = await settledOrNull(dialog)
@@ -183,39 +190,6 @@ async function watchForStartupDialog(
   return null
 }
 
-/**
- * An agent with no prompt hook proves nothing about its turn, so its launch readiness is the
- * evidence, as it was before a paste: ready or blocked. No readiness in the window stays unknown,
- * since the agent may already be working on the brief it was launched with.
- */
-async function awaitUnsupportedLaunchReadiness(
-  runtime: OrcaRuntimeService,
-  terminalHandle: string,
-  agent: TuiAgent | null,
-  deadline: number
-): Promise<WorkerTurnStartObservation> {
-  const timeoutMs = Math.max(1, deadline - Date.now())
-  let wait: RuntimeTerminalWait | undefined
-  try {
-    wait = agent
-      ? await waitForWorkerStartComposer(runtime, terminalHandle, agent, timeoutMs)
-      : await runtime.waitForTerminal(terminalHandle, {
-          condition: 'tui-idle',
-          timeoutMs,
-          launchReadiness: true
-        })
-  } catch {
-    return { verdict: 'unobserved', reason: describeUnreadyWorkerLaunch(agent, timeoutMs) }
-  }
-  if (wait?.blockedReason) {
-    return blockedLaunchObservation(wait.blockedReason)
-  }
-  if (wait && !wait.satisfied) {
-    throw new Error(`Agent did not become ready (${wait.status}).`)
-  }
-  return { verdict: 'unsupported' }
-}
-
 function blockedLaunchObservation(
   blockedReason: RuntimeTerminalWaitBlockedReason
 ): WorkerTurnStartObservation {
@@ -240,15 +214,6 @@ function describeUnobservedWorkerLaunch(agent: string | null, windowMs: number):
   )
 }
 
-function describeUnreadyWorkerLaunch(agent: string | null, windowMs: number): string {
-  return (
-    `The task rode ${agent ?? 'the agent'}'s launch command line. This agent reports no turn ` +
-    `start, and it showed neither readiness nor a startup dialog within ` +
-    `${Math.round(windowMs / 1000)}s. This is unverifiable, not proof the worker is dead: it may ` +
-    'already be working on the task. If the worker reports, this Dispatch settles normally.'
-  )
-}
-
 async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   await new Promise<void>((resolve) => {
     const timer = setTimeout(done, ms)
@@ -263,4 +228,18 @@ async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 
 async function settledOrNull<T>(promise: Promise<T | null>): Promise<T | null> {
   return await Promise.race([promise, Promise.resolve(null)])
+}
+
+async function settledWithin<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }

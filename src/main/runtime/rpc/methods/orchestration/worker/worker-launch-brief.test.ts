@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { LaunchFile } from '../../../../../../shared/launch-prompt-file'
+import { normalizePromptField } from '../../../../../../shared/agent-status-field-normalization'
 import { createOrchestrationWorkerReleaseHarness } from './worker-release.test-support'
 
 describe('worker-start with the brief on the launch command line', () => {
@@ -7,7 +7,7 @@ describe('worker-start with the brief on the launch command line', () => {
 
   afterEach(() => h.cleanup())
 
-  it('puts the brief in a sensitive launch file on the spawn and pastes nothing', async () => {
+  it("offers the brief to the carry rule as main's paste caller, and pastes nothing it carried", async () => {
     h.setup()
     const { dispatchId } = await h.startWorker({ agent: 'codex' })
 
@@ -16,30 +16,55 @@ describe('worker-start with the brief on the launch command line', () => {
       expect.objectContaining({
         startupAgent: 'codex',
         preAllocatedHandle: 'term_worker',
-        startupPrompt: expect.stringMatching(/^The full task is in the file `orca-launch-file-/),
-        launchFile: expect.objectContaining({ sensitive: true })
+        startupPromptPaste: 'once-agent-runs',
+        onStartupPromptCarry: expect.any(Function)
       })
     )
-    const launchFile = vi.mocked(h.runtime.createTerminal).mock.calls[0][1]?.launchFile
-    expect(launchFile?.content).toContain('release fixture task')
-    expect(launchFile?.content).toContain(dispatchId)
-    // Why: the brief rides only in the file, never on a command line or in history.
-    expect(vi.mocked(h.runtime.createTerminal).mock.calls[0][1]?.startupPrompt).not.toContain(
-      'release fixture task'
-    )
+    const options = vi.mocked(h.runtime.createTerminal).mock.calls[0][1]
+    expect(options).not.toHaveProperty('launchFile')
+    expect(options?.startupPrompt).toContain('release fixture task')
+    expect(options?.startupPrompt).toContain(dispatchId)
     expect(h.runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
-    expect(h.runtime.waitForTerminal).toHaveBeenCalledWith(
-      'term_worker',
-      expect.objectContaining({ condition: 'tui-idle', signal: expect.any(AbortSignal) })
-    )
+    expect(h.runtime.observeTerminalLaunchTurnStart).toHaveBeenCalled()
+  })
+
+  // Why: every status reader finds a worker by its preamble; the brief is the prompt the agent's
+  // hook reports, so it publishes the compact form main published for the pasted brief.
+  it("publishes the brief as the worker's status prompt, compacted to its task as main did", async () => {
+    h.setup()
+    await h.startWorker({ agent: 'claude' })
+
+    const prompt = vi.mocked(h.runtime.createTerminal).mock.calls[0][1]?.startupPrompt ?? ''
+    const status = normalizePromptField(prompt)
+    expect(status).toMatch(/^You are working inside Orca, a multi-agent IDE\./)
+    expect(status).toContain('=== TASK === release fixture task')
+    expect(status).not.toContain('orca-launch-file')
+  })
+
+  // Why: a host whose line cannot carry the brief whole (a Windows shell, an SSH host with a WSL
+  // shell) gets main's paste after readiness instead of a refused launch file.
+  it('pastes the brief once the agent is ready where the carry rule leaves it', async () => {
+    h.setup()
+    vi.mocked(h.runtime.createTerminal).mockImplementation(async (_selector, options) => {
+      options?.onStartupPromptCarry?.(false)
+      return { handle: 'term_worker', worktreeId: 'repo::worktree', title: 'worker' }
+    })
+
+    const { dispatchId } = await h.startWorker({ agent: 'codex' })
+
+    expect(h.runtime.observeTerminalLaunchTurnStart).not.toHaveBeenCalled()
+    expect(h.runtime.sendTerminalAgentPrompt).toHaveBeenCalledOnce()
+    expect(vi.mocked(h.runtime.sendTerminalAgentPrompt).mock.calls[0][1]).toContain(dispatchId)
+    expect(h.db.getWorkerDispatch(dispatchId)?.state).toBe('ready')
   })
 
   it('binds the dispatch to the handle the brief names, and only after the spawn', async () => {
     h.setup()
     let boundAtSpawn: unknown = 'unset'
-    let launchFile: LaunchFile | undefined
+    let brief: string | undefined
     vi.mocked(h.runtime.createTerminal).mockImplementation(async (_selector, options) => {
-      launchFile = options?.launchFile
+      brief = options?.startupPrompt
+      options?.onStartupPromptCarry?.(true)
       boundAtSpawn = h.db.db
         .prepare('SELECT id FROM dispatch_contexts WHERE assignee_handle = ?')
         .get('term_worker')
@@ -48,13 +73,44 @@ describe('worker-start with the brief on the launch command line', () => {
 
     const { dispatchId } = await h.startWorker({ agent: 'codex' })
 
-    expect(launchFile?.content).toContain('--from term_worker')
+    expect(brief).toContain('--from term_worker')
     expect(boundAtSpawn).toBeUndefined()
     expect(
       h.db.db
         .prepare('SELECT id FROM dispatch_contexts WHERE assignee_handle = ?')
         .get('term_worker')
     ).toEqual({ id: dispatchId })
+  })
+
+  // Why: the terminal is live with the brief on its line, so a retry must not run the task twice.
+  it('fails a start whose terminal lost the handle its brief names, closing that terminal', async () => {
+    h.setup()
+    vi.mocked(h.runtime.createTerminal).mockImplementation(async (_selector, options) => {
+      options?.onStartupPromptCarry?.(true)
+      return { handle: 'term_adopted', worktreeId: 'repo::worktree', title: 'worker' }
+    })
+    const task = h.db.createTask({ spec: 'adopted pane', runId: h.activeRunId })
+
+    await expect(
+      h.call('orchestration.workerStart', { task: task.id, from: 'term_coord', agent: 'codex' })
+    ).resolves.toMatchObject({
+      state: 'failed',
+      lastError: 'Worker terminal did not keep its pre-allocated handle.'
+    })
+    expect(h.runtime.closeTerminal).toHaveBeenCalledWith('term_adopted')
+  })
+
+  it("names the CLI command predicted for the worker's own terminal", async () => {
+    h.setup()
+    vi.mocked(h.runtime.predictOrchestrationCliCommandForSpawn).mockResolvedValue('orca-ide')
+
+    await h.startWorker({ agent: 'codex' })
+
+    expect(h.runtime.predictOrchestrationCliCommandForSpawn).toHaveBeenCalledWith({
+      worktreeId: 'repo::worktree'
+    })
+    const brief = vi.mocked(h.runtime.createTerminal).mock.calls[0][1]?.startupPrompt
+    expect(brief).toContain('orca-ide orchestration send')
   })
 
   it('reads a turn the launch observation did not see as unknown, not ready', async () => {
@@ -75,19 +131,9 @@ describe('worker-start with the brief on the launch command line', () => {
     expect(receipt).not.toMatchObject({ lastError: expect.stringMatching(/composer|up to 30s/) })
   })
 
-  // No agent measured reading its launch file lacks a prompt hook today, so the verdict is mocked;
-  // this keeps the start truthful if one is added.
-  describe('a launch-file agent with no prompt hook', () => {
-    const blockedWait = {
-      handle: 'term_worker',
-      condition: 'tui-idle' as const,
-      satisfied: false,
-      status: 'running' as const,
-      exitCode: null,
-      blockedReason: 'agent-trust-workspace' as const
-    }
-
-    function startUnsupported(spec: string) {
+  // Why: a launch whose hooks give no proof is judged on its own evidence, as main judged it.
+  describe('a launch proven only by the agent holding its terminal', () => {
+    function startProvenByForeground(spec: string) {
       vi.mocked(h.runtime.observeTerminalLaunchTurnStart).mockResolvedValue('unsupported')
       const task = h.db.createTask({ spec, runId: h.activeRunId })
       return h.call('orchestration.workerStart', {
@@ -97,40 +143,49 @@ describe('worker-start with the brief on the launch command line', () => {
       })
     }
 
-    it('is ready only once its launch readiness wait says so', async () => {
+    it('is ready, saying no turn start was observable', async () => {
       h.setup()
-      await expect(startUnsupported('ready worker')).resolves.toMatchObject({
+      await expect(startProvenByForeground('ready worker')).resolves.toMatchObject({
         state: 'ready',
         turnStart: 'unsupported'
       })
-      expect(h.runtime.waitForTerminal).toHaveBeenCalledWith(
-        'term_worker',
-        expect.objectContaining({ condition: 'tui-idle', launchReadiness: true })
-      )
     })
 
     it('is not ready while a trust dialog holds it', async () => {
       h.setup()
-      vi.mocked(h.runtime.waitForTerminal).mockResolvedValue(blockedWait)
-      await expect(startUnsupported('trust-blocked worker')).resolves.toMatchObject({
+      vi.mocked(h.runtime.waitForTerminal).mockResolvedValue({
+        handle: 'term_worker',
+        condition: 'tui-idle',
+        satisfied: false,
+        status: 'running',
+        exitCode: null,
+        blockedReason: 'agent-trust-workspace'
+      })
+      await expect(startProvenByForeground('trust-blocked worker')).resolves.toMatchObject({
         state: 'outcome_unknown',
         stage: 'turn_start_blocked',
         lastError: expect.stringContaining('Agent startup blocked: agent-trust-workspace')
       })
     })
-
-    it('stays unknown when it never shows readiness', async () => {
-      h.setup()
-      vi.mocked(h.runtime.waitForTerminal).mockRejectedValue(new Error('timeout'))
-      await expect(startUnsupported('silent worker')).resolves.toMatchObject({
-        state: 'outcome_unknown',
-        turnStart: 'unobserved',
-        lastError: expect.stringContaining('reports no turn start')
-      })
-    })
   })
 
-  it('pastes the brief, with no launch file, for an agent not measured reading one', async () => {
+  // Why: main's readiness wait failed a start whose agent died at launch; the host can prove it.
+  it('fails and tears down a start whose agent the host proves exited at launch', async () => {
+    h.setup()
+    vi.mocked(h.runtime.observeTerminalLaunchTurnStart).mockResolvedValue('exited')
+    const task = h.db.createTask({ spec: 'crashing worker', runId: h.activeRunId })
+
+    await expect(
+      h.call('orchestration.workerStart', { task: task.id, from: 'term_coord', agent: 'codex' })
+    ).resolves.toMatchObject({
+      state: 'failed',
+      failedStage: 'turn_observation',
+      lastError: expect.stringContaining('Agent exited before its first turn started')
+    })
+    expect(h.db.getTask(task.id)?.status).toBe('failed')
+  })
+
+  it('offers the brief to an agent that does not read a launch file too', async () => {
     h.setup()
     const task = h.db.createTask({ spec: 'gemini brief', runId: h.activeRunId })
     await h.call('orchestration.workerStart', {
@@ -140,10 +195,13 @@ describe('worker-start with the brief on the launch command line', () => {
     })
     expect(h.runtime.createTerminal).toHaveBeenCalledWith(
       expect.any(String),
-      expect.not.objectContaining({ launchFile: expect.anything() })
+      expect.objectContaining({
+        startupPrompt: expect.stringContaining('gemini brief'),
+        startupPromptPaste: 'once-agent-runs'
+      })
     )
-    expect(h.runtime.observeTerminalLaunchTurnStart).not.toHaveBeenCalled()
-    expect(h.runtime.sendTerminalAgentPrompt).toHaveBeenCalled()
+    expect(h.runtime.observeTerminalLaunchTurnStart).toHaveBeenCalled()
+    expect(h.runtime.sendTerminalAgentPrompt).not.toHaveBeenCalled()
   })
 
   it('still reports a dialog that paints after the agent first looked ready', async () => {
@@ -260,7 +318,7 @@ describe('worker-start with the brief on the launch command line', () => {
     })
     await h.startWorker({ agent: 'zcode' })
 
-    expect(vi.mocked(h.runtime.createTerminal).mock.calls[0][1]).not.toHaveProperty('launchFile')
+    expect(vi.mocked(h.runtime.createTerminal).mock.calls[0][1]).not.toHaveProperty('startupPrompt')
     expect(h.runtime.sendTerminalAgentPrompt).toHaveBeenCalledTimes(1)
   })
 })

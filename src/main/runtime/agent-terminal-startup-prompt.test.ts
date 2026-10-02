@@ -117,6 +117,23 @@ describe('a terminal create that is handed a launch prompt', () => {
     expect(spawnedCommand(spawn)).not.toContain('x'.repeat(100))
   })
 
+  // Why: orchestration pasted worker briefs on every host; such a caller keeps that paste.
+  it('leaves a prompt the line cannot carry to a caller whose paste is main’s', async () => {
+    const { runtime, spawn } = runtimeWithAgentLaunch()
+    const onStartupPromptCarry = vi.fn()
+
+    await runtime.createTerminal('id:wt-1', {
+      startupAgent: 'claude',
+      startupPrompt: 'x'.repeat(MAX_LINE_PROMPT_BYTES + 1),
+      startupPromptPaste: 'once-agent-runs',
+      onStartupPromptCarry
+    })
+
+    expect(onStartupPromptCarry).toHaveBeenCalledExactlyOnceWith(false)
+    expect(spawn.mock.calls[0]?.[0]?.launchFile).toBeUndefined()
+    expect(spawnedCommand(spawn)).not.toContain('x'.repeat(100))
+  })
+
   it('refuses such a prompt when the caller cannot paste it, rather than dropping it', async () => {
     const { runtime, spawn } = runtimeWithAgentLaunch()
 

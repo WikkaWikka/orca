@@ -1,32 +1,35 @@
 /**
- * A worker's dispatch brief delivered on its agent's launch command line, in a sensitive launch
- * file, instead of pasted into the agent's screen once it looks ready.
+ * A worker's dispatch brief offered to its agent's launch command, through the one carry rule
+ * (`carryLaunchPrompt`) every launch uses, as main's paste caller (`once-agent-runs`): the brief
+ * rides the line where the line carries it exactly, and is otherwise left for worker start's paste
+ * once the agent is ready, as main pasted it.
  *
  * Why: a paste races the agent's startup; a fresh Codex lost or truncated worker briefs, and Enter
- * could land on a startup dialog (#23745). The brief names the worker's handle, so it is
- * allocated before the spawn.
+ * could land on a startup dialog (#23745). The brief names the worker's handle and the CLI command
+ * its terminal will run, so both are settled before the spawn.
  */
-import { getAppEnvironment } from '../../../../../../shared/app-environment'
-import { carryInLaunchFile, type LaunchFile } from '../../../../../../shared/launch-prompt-file'
-import { agentReadsLaunchFile } from '../../../../../../shared/launch-prompt-carry'
 import type { TuiAgent } from '../../../../../../shared/tui-agent'
 import { agentPromptRidesLaunchCommand } from '../../../../../../shared/tui-agent-startup'
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
 import type { OrchestrationDb } from '../../../../orchestration/db'
 import { orcaSessionIdOrHandle } from '../../../../orchestration/orchestration-party'
-import { resolveTerminalOrchestrationCliCommand } from '../../../../orchestration/cli-command'
 import { buildDispatchPreamble } from '../../../../orchestration/preamble'
+import type { TerminalCreateOptions } from '../../../../runtime-terminal-contracts'
 
 export type WorkerLaunchBrief = {
   /** Pre-allocated: the brief names the worker's handle before its terminal exists. */
   handle: string
-  startupPrompt: string
-  launchFile: LaunchFile
+  text: string
   /** Taken before the spawn: only a prompt-carrying hook turn after it proves the brief landed. */
   launchStartedAt: number
+  /** Set by the spawn's carry rule; false leaves the brief for the paste once the agent is ready. */
+  carried: boolean
 }
 
-export type WorkerLaunchBriefFactory = (worktreeId: string) => Promise<WorkerLaunchBrief>
+/** Where the worker's terminal will spawn: an existing worktree, or one created for a repo. */
+export type WorkerLaunchTarget = { worktreeId: string } | { repoSelector: string }
+
+export type WorkerLaunchBriefFactory = (target: WorkerLaunchTarget) => Promise<WorkerLaunchBrief>
 
 export function createWorkerLaunchBriefFactory(args: {
   runtime: OrcaRuntimeService
@@ -40,21 +43,13 @@ export function createWorkerLaunchBriefFactory(args: {
   devMode: boolean | undefined
 }): WorkerLaunchBriefFactory | undefined {
   const { runtime, agent } = args
-  // Why: an agent that takes its text only after start has no launch command to carry it, and one
-  // not measured reading its launch file would stop on an approval; both keep the paste.
-  if (!agent || !agentPromptRidesLaunchCommand(agent) || !agentReadsLaunchFile(agent)) {
+  // Why: an agent that takes its text only after start has no launch command to carry it.
+  if (!agent || !agentPromptRidesLaunchCommand(agent)) {
     return undefined
   }
-  return async (worktreeId) => {
-    const scope = await runtime.showTerminalWorkspaceLaunchScope(`id:${worktreeId}`)
-    const target = {
-      connectionId: scope.connectionId,
-      isWsl: undefined,
-      worktreeId,
-      projectRuntime: runtime.resolveProjectRuntimeForWorktree(worktreeId)
-    }
+  return async (target) => {
     const handle = runtime.createPreAllocatedTerminalHandle()
-    const brief = buildDispatchPreamble({
+    const text = buildDispatchPreamble({
       canDispatchSubWorkers: args.dispatchDepth < runtime.getNestedWorkerMaxDepth(),
       taskId: args.taskId,
       dispatchId: args.dispatchId,
@@ -62,14 +57,22 @@ export function createWorkerLaunchBriefFactory(args: {
       coordinatorHandle: orcaSessionIdOrHandle(args.coordinatorHandle, args.db),
       workerHandle: handle,
       devMode: args.devMode,
-      cliCommand: resolveTerminalOrchestrationCliCommand({
-        ...target,
-        runtimeCliCommand: getAppEnvironment().isPackaged() ? undefined : 'orca-dev'
-      })
+      cliCommand: await runtime.predictOrchestrationCliCommandForSpawn(target)
     })
-    // Why sensitive: Orca's brief, not the user's words, is never shown as the worker's prompt or
-    // used to name its worktree.
-    const { prompt, launchFile } = carryInLaunchFile(brief, true)
-    return { handle, startupPrompt: prompt, launchFile, launchStartedAt: Date.now() }
+    return { handle, text, launchStartedAt: Date.now(), carried: false }
+  }
+}
+
+/** The create options that offer `brief` to the carry rule; its outcome lands on `brief.carried`. */
+export function workerLaunchBriefCreateOptions(
+  brief: WorkerLaunchBrief
+): Pick<TerminalCreateOptions, 'startupPrompt' | 'startupPromptPaste' | 'onStartupPromptCarry'> {
+  return {
+    startupPrompt: brief.text,
+    // Main pasted worker briefs once the agent was ready, on every host.
+    startupPromptPaste: 'once-agent-runs',
+    onStartupPromptCarry: (carried) => {
+      brief.carried = carried
+    }
   }
 }

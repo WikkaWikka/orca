@@ -19,16 +19,21 @@ vi.mock('../git/worktree', () => ({
   listWorktreesStrict: vi.fn().mockResolvedValue([WORKTREE])
 }))
 
-async function launchedCodex(rows: () => AgentStatusIpcPayload[]) {
+async function launchedCodex(
+  rows: () => AgentStatusIpcPayload[],
+  options: { hooksEnabled?: boolean; foreground?: () => string | null } = {}
+) {
+  const store = makeStore()
+  const settings = { ...store.getSettings(), agentStatusHooksEnabled: options.hooksEnabled ?? true }
   // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the shared store fixture implements only what a launch reads.
-  const runtime = new OrcaRuntimeService(makeStore() as never, undefined, {
-    getAgentStatusSnapshot: rows
-  })
+  const launchStore = { ...store, getSettings: () => settings } as never
+  const runtime = new OrcaRuntimeService(launchStore, undefined, { getAgentStatusSnapshot: rows })
   runtime.setPtyController({
     spawn: vi.fn().mockResolvedValue({ id: 'pty-launch' }),
     write: () => true,
     kill: () => true,
-    getForegroundProcess: async () => null
+    getForegroundProcess: async () => null,
+    confirmForegroundProcess: async () => options.foreground?.() ?? null
   })
   const { handle } = await runtime.createTerminal(`path:${AGENT_PROMPT_TEST_WORKTREE_PATH}`, {
     launchAgent: 'codex'
@@ -87,15 +92,65 @@ describe('observeTerminalLaunchTurnStart', () => {
     ).resolves.toBe('observed')
   })
 
-  it('reports an agent with no settled turn-start signal as unsupported', async () => {
-    const { runtime, handle } = await launchedCodex(() => [])
+  // Why: with hooks off, main's evidence decides, so a worker start is no slower than main's.
+  it('takes a title turn-start edge as the turn when hooks are turned off', async () => {
+    const { runtime, handle } = await launchedCodex(() => [], { hooksEnabled: false })
+    const observed = runtime.observeTerminalLaunchTurnStart(
+      handle,
+      { launchStartedAt: Date.now(), agent: 'codex' },
+      2_000
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    runtime.onPtyData('pty-launch', '\x1b]0;Codex working\x07', Date.now())
 
-    await expect(
-      runtime.observeTerminalLaunchTurnStart(
-        handle,
-        { launchStartedAt: Date.now(), agent: 'aider' },
-        300
-      )
-    ).resolves.toBe('unsupported')
+    await expect(observed).resolves.toBe('observed')
   })
+
+  // A Windows host cannot prove an agent in front; its shell alone is all it reads.
+  it.skipIf(process.platform === 'win32')(
+    'takes an agent proven in front as the launch when its hooks give no proof',
+    async () => {
+      const { runtime, handle } = await launchedCodex(() => [], { foreground: () => 'aider' })
+
+      await expect(
+        runtime.observeTerminalLaunchTurnStart(
+          handle,
+          { launchStartedAt: Date.now(), agent: 'aider' },
+          2_000
+        )
+      ).resolves.toBe('unsupported')
+    }
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'reports a launch the shell finished, with the shell back in front, as exited',
+    async () => {
+      const { runtime, handle } = await launchedCodex(() => [], { foreground: () => 'zsh' })
+      const observed = runtime.observeTerminalLaunchTurnStart(
+        handle,
+        { launchStartedAt: Date.now(), agent: 'codex' },
+        2_000
+      )
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      runtime.emitDaemonPtyTransientFact('pty-launch', { kind: 'command-finished', exitCode: 1 })
+
+      await expect(observed).resolves.toBe('exited')
+    }
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'does not read a finished command as an exit while the agent still holds the terminal',
+    async () => {
+      const { runtime, handle } = await launchedCodex(() => [], { foreground: () => 'codex' })
+      const observed = runtime.observeTerminalLaunchTurnStart(
+        handle,
+        { launchStartedAt: Date.now(), agent: 'codex' },
+        800
+      )
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      runtime.emitDaemonPtyTransientFact('pty-launch', { kind: 'command-finished', exitCode: 0 })
+
+      await expect(observed).resolves.toBe('unobserved')
+    }
+  )
 })
