@@ -4,9 +4,14 @@ import type { RuntimeLeafRecord, RuntimePtyWorktreeRecord } from './runtime-term
 import type { TerminalHandleRecord } from './runtime-terminal-contracts'
 import type {
   AgentPromptTurnStartEvidence,
-  AgentPromptWaitTextCache
+  AgentPromptWaitTextCache,
+  LaunchTurnStartVerdict
 } from './agent-prompt-submission-verification'
-import { verifyAgentPromptSubmission } from './agent-prompt-submission-verification'
+import {
+  isTerminalSendSettlementAgent,
+  verifyAgentPromptSubmission
+} from './agent-prompt-submission-verification'
+import type { TuiAgent } from '../../shared/tui-agent'
 import { AgentPromptRequestCorrelation } from './agent-prompt-request-correlation'
 
 export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWithSerializeAgentPromptSubmission {
@@ -91,6 +96,46 @@ export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWit
       if (error instanceof Error && error.message === 'agent_prompt_blocked') {
         this.forgetAgentPromptRequest(binding.ptyId, binding.generation, prompt.requestId)
         return { ...prompt, observation: 'permission' }
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Whether a prompt that rode an agent's launch command line started a turn. Only a hook event
+   * that carried an explicit prompt after `launchStartedAt` counts: a spinner title, a prompt-less
+   * SessionStart or output bytes prove nothing about the prompt.
+   */
+  async observeTerminalLaunchTurnStart(
+    handle: string,
+    launch: { launchStartedAt: number; agent: TuiAgent | null },
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<LaunchTurnStartVerdict> {
+    if (!isTerminalSendSettlementAgent(launch.agent)) {
+      return 'unsupported'
+    }
+    const { ptyId } = this.getTerminalPromptRequestBinding(handle)
+    try {
+      await verifyAgentPromptSubmission({
+        baseline: {
+          ...this.getAgentPromptActivity(handle, ptyId),
+          explicitPromptStartedAt: launch.launchStartedAt
+        },
+        readActivity: () => this.getAgentPromptActivity(handle, ptyId),
+        explicitPromptOnly: true,
+        signal,
+        timeoutMs
+      })
+      return 'observed'
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      if (message === 'agent_prompt_blocked') {
+        return 'permission'
+      }
+      // Why: a replaced PTY leaves the launch unproven, not failed.
+      if (message === 'agent_prompt_stalled' || message === 'terminal_handle_stale') {
+        return 'unobserved'
       }
       throw error
     }

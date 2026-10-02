@@ -11,6 +11,9 @@
  * That reorder is also why the host verdict lands here: `agentSession.createSupport` can only be
  * asked about a workspace that exists, so for a created worktree it cannot run before the start.
  * A refusal becomes a terminal agent in the worktree that was just created, never a failed start.
+ *
+ * A terminal worker whose brief rides its launch line takes the same order: agent-first creation
+ * types its own launch line, so the terminal is created after setup's gate instead.
  */
 
 import type { AgentLaunchPreferences } from '../../../../../../shared/agent-session-host-authority'
@@ -29,6 +32,7 @@ import {
   type WorkerSetupReceipt
 } from './worker-topology'
 import { createWorkerWorktree } from './worker-worktree-creation'
+import type { WorkerLaunchBrief, WorkerLaunchBriefFactory } from './worker-launch-brief'
 
 /** Only what the placement itself reads. The runtime's own worktree accessors are untyped, so
  *  naming the two fields keeps `any` out of this module's unions. */
@@ -42,6 +46,8 @@ export type WorkerAgentPlacement = {
   terminalHandle: string
   structuredSession: WorkerStructuredSession | null
   setupReceipt: WorkerSetupReceipt
+  /** Present when the dispatch brief rode the agent's launch command instead of a paste. */
+  launchBrief: WorkerLaunchBrief | null
   warning?: string
 }
 
@@ -62,6 +68,10 @@ type WorkerAgentPlacementArgs = {
   effects: WorkerEffect[]
   /** Attributes a throw to the step that was running, the way the caller's own stages do. */
   onStage: (stage: string) => void
+  /** Builds the brief a created terminal's launch line carries; absent keeps the paste. */
+  launchBrief?: WorkerLaunchBriefFactory
+  /** Holds a created worktree's agent terminal until its wait-for-setup gate settles. */
+  awaitSetupBeforeAgent: (worktreeId: string, setup: WorkerSetupReceipt) => Promise<void>
 }
 
 /** The setup receipt for a placement that creates no worktree, and the one a start reports if it
@@ -94,7 +104,8 @@ export async function placeWorkerAgent(
       worktree,
       terminalHandle: args.params.terminal,
       structuredSession: null,
-      setupReceipt: EXISTING_WORKTREE_SETUP
+      setupReceipt: EXISTING_WORKTREE_SETUP,
+      launchBrief: null
     }
   }
   return {
@@ -110,6 +121,8 @@ async function placeInCreatedWorktree(
   coordinatorWorktree: PlacedWorktree
 ): Promise<WorkerAgentPlacement> {
   args.onStage('worktree_create')
+  // Why: agent-first creation types the launch line itself, so a brief must create the terminal after.
+  const agentFirst = args.mode.mode !== 'structured' && !args.launchBrief
   const created = await createWorkerWorktree({
     runtime: args.runtime,
     db: args.db,
@@ -118,22 +131,30 @@ async function placeInCreatedWorktree(
     coordinatorWorktree,
     params: args.params,
     agent: args.agent as TuiAgent,
-    withAgentTerminal: args.mode.mode !== 'structured',
+    withAgentTerminal: agentFirst,
     ...(args.launchPreferences ? { launchPreferences: args.launchPreferences } : {}),
     effects: args.effects
   })
   const worktree = requireWorktree(created.worktree)
-  if (args.mode.mode !== 'structured') {
+  if (agentFirst) {
     return {
       mode: args.mode,
       worktree,
       terminalHandle: requireTerminal(created.terminalHandle),
       structuredSession: null,
-      setupReceipt: created.setupReceipt
+      setupReceipt: created.setupReceipt,
+      launchBrief: null
     }
   }
   args.onStage('terminal_create')
-  const mode = await resolveWorkerStartModeOnHost(args.runtime, args.mode, worktree.id, args.agent)
+  const mode =
+    args.mode.mode === 'structured'
+      ? await resolveWorkerStartModeOnHost(args.runtime, args.mode, worktree.id, args.agent)
+      : args.mode
+  if (mode.mode !== 'structured') {
+    await args.awaitSetupBeforeAgent(worktree.id, created.setupReceipt)
+    args.onStage('terminal_create')
+  }
   return {
     mode,
     worktree,
@@ -147,7 +168,9 @@ async function createWorkerAgentSurface(
   args: WorkerAgentPlacementArgs,
   worktreeId: string,
   mode: WorkerStartModeReceipt
-): Promise<Pick<WorkerAgentPlacement, 'terminalHandle' | 'structuredSession' | 'warning'>> {
+): Promise<
+  Pick<WorkerAgentPlacement, 'terminalHandle' | 'structuredSession' | 'launchBrief' | 'warning'>
+> {
   args.db.recordWorkerStage({
     dispatchId: args.dispatchId,
     stage: 'terminal_creating',
@@ -163,19 +186,26 @@ async function createWorkerAgentSurface(
       ...(args.launchPreferences ? { launchPreferences: args.launchPreferences } : {}),
       effects: args.effects
     })
-    return { terminalHandle: structuredSession.identity.handle, structuredSession }
+    return {
+      terminalHandle: structuredSession.identity.handle,
+      structuredSession,
+      launchBrief: null
+    }
   }
+  const launchBrief = (await args.launchBrief?.(worktreeId)) ?? null
   const terminal = await createExistingWorktreeWorkerTerminal({
     runtime: args.runtime,
     worktreeId,
     agent: args.agent as TuiAgent,
     ...(args.launchPreferences ? { launchPreferences: args.launchPreferences } : {}),
     taskId: args.taskId,
-    effects: args.effects
+    effects: args.effects,
+    launchBrief
   })
   return {
     terminalHandle: terminal.handle,
     structuredSession: null,
+    launchBrief,
     ...(terminal.warning ? { warning: terminal.warning } : {})
   }
 }

@@ -29,6 +29,9 @@ const TERMINAL_HANDLE = 'term_worker'
 const STRUCTURED_ORCA_SESSION_ID = 'orca_session_id:sess_worker'
 
 const structuredPreambles: string[] = []
+/** A terminal worker's brief rides its launch line, in the launch file the host writes. */
+const terminalBriefs: string[] = []
+
 // The session host the code under test reads; a structural fake, so no host type is claimed.
 const hostRef = vi.hoisted((): { current: unknown } => ({ current: null }))
 
@@ -42,7 +45,14 @@ vi.mock('./orchestration/worker/worker-topology', async (importOriginal) => ({
     args.effects.push({ kind: 'terminal', role: 'agent', action: 'created' })
     return { identity: { handle: STRUCTURED_HANDLE, sessionId: 'sess_worker' }, host: {} }
   },
-  createExistingWorktreeWorkerTerminal: async () => ({ handle: TERMINAL_HANDLE })
+  createExistingWorktreeWorkerTerminal: async (args: {
+    launchBrief?: { launchFile: { content: string } } | null
+  }) => {
+    if (args.launchBrief) {
+      terminalBriefs.push(args.launchBrief.launchFile.content)
+    }
+    return { handle: TERMINAL_HANDLE }
+  }
 }))
 vi.mock('./orchestration-structured-worker-session', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -116,6 +126,7 @@ describe('a worker cannot tell which mode it is running in', () => {
 
   beforeEach(() => {
     structuredPreambles.length = 0
+    terminalBriefs.length = 0
     structuredWorkerIdentities.clear()
     db = new OrchestrationDb(':memory:')
     runtime = new OrcaRuntimeService()
@@ -148,7 +159,18 @@ describe('a worker cannot tell which mode it is running in', () => {
       status: 'running',
       exitCode: null
     })
-    vi.spyOn(runtime, 'getTerminalOrchestrationCliCommand').mockReturnValue('orca')
+    // What an unpackaged build resolves, which the launch brief also resolves for itself.
+    vi.spyOn(runtime, 'getTerminalOrchestrationCliCommand').mockReturnValue('orca-dev')
+    // The worker's brief rides its launch line, so its handle is minted before the spawn.
+    vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue(TERMINAL_HANDLE)
+    vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
+      id: WORKTREE,
+      path: '/repo/worktree',
+      connectionId: null,
+      repo: null,
+      folderWorkspace: null
+    })
+    vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
     vi.spyOn(runtime, 'sendTerminalAgentPrompt').mockResolvedValue({
       handle: TERMINAL_HANDLE,
       accepted: true,
@@ -211,7 +233,8 @@ describe('a worker cannot tell which mode it is running in', () => {
     expect(structured.mode.mode).toBe('structured')
     expect(terminal.mode.mode).toBe('terminal')
     const structuredPreamble = structuredPreambles[0] as string
-    const terminalPreamble = vi.mocked(runtime.sendTerminalAgentPrompt).mock.calls[0]?.[1] as string
+    const terminalPreamble = terminalBriefs[0] ?? ''
+    expect(terminalPreamble).not.toBe('')
     const selfLine = `\nYour Orca session ID is: ${STRUCTURED_ORCA_SESSION_ID}`
     expect(
       normalizePreamble(
@@ -245,12 +268,10 @@ describe('a worker cannot tell which mode it is running in', () => {
     expect(result).toMatchObject({ state: 'ready' })
     expect(showTerminal).not.toHaveBeenCalled()
     // Its sub-worker is told the coordinator's Orca session ID, not the handle it was minted.
-    expect(vi.mocked(runtime.sendTerminalAgentPrompt).mock.calls[0]?.[1]).toContain(
+    expect(terminalBriefs[0]).toContain(
       "Your coordinator's Orca session ID is: orca_session_id:sess_coord\n"
     )
-    expect(vi.mocked(runtime.sendTerminalAgentPrompt).mock.calls[0]?.[1]).toContain(
-      '=== SUB-DISPATCH ==='
-    )
+    expect(terminalBriefs[0]).toContain('=== SUB-DISPATCH ===')
   })
 
   it('refuses an unavailable output source without disclosing the mode', async () => {

@@ -4,6 +4,7 @@ import type { TuiAgent } from '../../../../../../shared/tui-agent'
 import type { OrcaRuntimeService } from '../../../../orca-runtime'
 import type { OrchestrationDb } from '../../../../orchestration/db'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
+import type { WorkerLaunchBrief } from './worker-launch-brief'
 import { createStructuredWorkerSession } from '../../orchestration-structured-worker-session'
 
 export type WorkerEffect = {
@@ -63,7 +64,9 @@ export async function createExistingWorktreeWorkerTerminal(args: {
   launchPreferences?: AgentLaunchPreferences
   taskId: string
   effects: WorkerEffect[]
+  launchBrief?: WorkerLaunchBrief | null
 }): Promise<{ handle: string; warning?: string }> {
+  const brief = args.launchBrief
   const terminal = await args.runtime.createTerminal(`id:${args.worktreeId}`, {
     // Why: the agent id is not a shell command — `cursor` resolves to the Cursor
     // desktop app while its CLI is `cursor-agent`. Let the runtime build the
@@ -74,8 +77,19 @@ export async function createExistingWorktreeWorkerTerminal(args: {
     title: `worker-${args.taskId}`,
     // Why: dispatching a worker is background work; it must not pull the sidebar
     // to the worker's workspace while the user is reading somewhere else.
-    surfaceOwner: false
+    surfaceOwner: false,
+    ...(brief
+      ? {
+          preAllocatedHandle: brief.handle,
+          startupPrompt: brief.startupPrompt,
+          launchFile: brief.launchFile
+        }
+      : {})
   })
+  if (brief && terminal.handle !== brief.handle) {
+    // Why: the brief names this handle; a different one would teach the worker the wrong identity.
+    throw new Error('Worker terminal did not keep its pre-allocated handle.')
+  }
   args.effects.push({
     kind: 'terminal',
     role: 'agent',

@@ -99,6 +99,16 @@ export function createOrchestrationWorkerReleaseHarness(): OrchestrationWorkerRe
       worktreeId: 'repo::worktree',
       title: 'worker'
     })
+    // The worker's brief rides its launch line, so its handle is minted before the spawn.
+    vi.spyOn(runtime, 'createPreAllocatedTerminalHandle').mockReturnValue('term_worker')
+    vi.spyOn(runtime, 'showTerminalWorkspaceLaunchScope').mockResolvedValue({
+      id: 'repo::worktree',
+      path: '/repo/worktree',
+      connectionId: null,
+      repo: null,
+      folderWorkspace: null
+    })
+    vi.spyOn(runtime, 'observeTerminalLaunchTurnStart').mockResolvedValue('observed')
     vi.spyOn(runtime, 'waitForTerminal').mockResolvedValue({
       handle: 'term_worker',
       condition: 'tui-idle',

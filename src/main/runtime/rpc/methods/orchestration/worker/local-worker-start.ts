@@ -17,19 +17,26 @@ import { awaitStructuredWorkerSetupGate } from './worker-start-structured-setup-
 import { assertOrchestrationWorktreeCreationSupported } from './folder-worktree-placement'
 import type { WorkerStartInput } from './worker-start-schema'
 import {
+  createSetupBeforeAgentGate,
   persistGatedSetupSpawnFailure,
   persistWorkerReadinessStage,
-  persistWorkerSetupWaitOutcome
+  persistWorkerSetupWaitOutcome,
+  remainingLaunchObservationMs
 } from './worker-setup-gate'
 import { failWorkerStartWithReceipt } from './worker-start-receipt'
 import { parseTaskDeps } from './task-deps-argument'
 import { assertExplicitWorkerTerminalUsable } from './explicit-worker-terminal-validation'
 import { recordCreatedWorkerTerminalCustody } from './created-worker-terminal-custody'
 import { tearDownFailedWorkerStart } from './failed-worker-start-teardown'
-import { requireWorkerAuthority, type WorkerEffect } from './worker-topology'
+import {
+  requireWorkerAuthority,
+  type WorkerEffect,
+  type WorkerSetupReceipt
+} from './worker-topology'
 import { prepareLocalWorkerStart } from './worker-start-validation'
 import { deliverAndSettleWorkerStartReadiness } from './worker-start-readiness-settlement'
 import { waitForWorkerStartComposer } from '../../../../launched-agent-composer-readiness'
+import { createWorkerLaunchBriefFactory } from './worker-launch-brief'
 
 type WorkerStartMutation = {
   callerFingerprint: string
@@ -138,6 +145,23 @@ export async function startLocalWorker(args: {
   let terminalHandle = params.terminal
   let placed: Awaited<ReturnType<typeof placeWorkerAgent>> | undefined
   let failedStage = 'terminal_create'
+  const timeoutMs = params.timeoutMs ?? 60_000
+  let gatedSetupReceipt: WorkerSetupReceipt | undefined
+  let setupGateStartedAt: number | undefined
+  const awaitSetupBeforeAgent = createSetupBeforeAgentGate({
+    runtime,
+    db,
+    dispatchId: started.dispatch.id,
+    effects,
+    timeoutMs,
+    onStage: (stage) => {
+      failedStage = stage
+    },
+    onSetupReceipt: (setup) => {
+      gatedSetupReceipt = setup
+      setupGateStartedAt = Date.now()
+    }
+  })
   try {
     placed = await placeWorkerAgent({
       runtime,
@@ -154,7 +178,23 @@ export async function startLocalWorker(args: {
       effects,
       onStage: (stage) => {
         failedStage = stage
-      }
+      },
+      awaitSetupBeforeAgent,
+      ...(params.terminal
+        ? {}
+        : {
+            launchBrief: createWorkerLaunchBriefFactory({
+              runtime,
+              db,
+              agent,
+              dispatchId: started.dispatch.id,
+              dispatchDepth: started.dispatch.depth,
+              taskId: task.id,
+              taskSpec: task.spec,
+              coordinatorHandle: params.from,
+              devMode: params.devMode
+            })
+          })
     })
     // A created worktree settles its mode only once the host can be asked about it, so the
     // receipt the caller decided is not always the one that ran.
@@ -182,25 +222,24 @@ export async function startLocalWorker(args: {
     // A structured session is ready the moment its attach returns ok: there is no boot-to-idle
     // gap and no terminal title to read an idle edge from. Only the repo's wait-for-setup policy
     // still holds it back, and that gate has to be waited on explicitly here.
-    const wait = structuredSession
-      ? await awaitStructuredWorkerSetupGate({
-          runtime,
-          setup: setupReceipt,
-          effects,
-          timeoutMs: params.timeoutMs ?? 60_000
-        })
-      : // A caller-supplied terminal was not freshly launched, so its composer marker may be long gone.
-        params.terminal || !agent
-        ? await runtime.waitForTerminal(terminalHandle, {
-            condition: 'tui-idle',
-            timeoutMs: params.timeoutMs ?? 60_000
-          })
-        : await waitForWorkerStartComposer(
+    // A brief on the launch line needs no idle agent to paste into; its blocking dialogs are
+    // watched during turn observation instead.
+    const wait = placed.launchBrief
+      ? null
+      : structuredSession
+        ? await awaitStructuredWorkerSetupGate({
             runtime,
-            terminalHandle,
-            agent,
-            params.timeoutMs ?? 60_000
-          )
+            setup: setupReceipt,
+            effects,
+            timeoutMs
+          })
+        : // A caller-supplied terminal was not freshly launched, so its composer marker may be long gone.
+          params.terminal || !agent
+          ? await runtime.waitForTerminal(terminalHandle, {
+              condition: 'tui-idle',
+              timeoutMs
+            })
+          : await waitForWorkerStartComposer(runtime, terminalHandle, agent, timeoutMs)
     if (wait) {
       persistWorkerSetupWaitOutcome({ ...setupStage, wait })
       if (!wait.satisfied) {
@@ -246,6 +285,8 @@ export async function startLocalWorker(args: {
       timeoutMs: params.timeoutMs ?? 60_000,
       effects,
       terminalRevealWarning: placed.warning,
+      launchBrief: placed.launchBrief,
+      launchObservationTimeoutMs: remainingLaunchObservationMs(timeoutMs, setupGateStartedAt),
       onStage: (stage) => {
         failedStage = stage
       }
@@ -263,7 +304,7 @@ export async function startLocalWorker(args: {
       dispatchId: started.dispatch.id,
       failedStage,
       error,
-      setup: placed?.setupReceipt ?? EXISTING_WORKTREE_SETUP,
+      setup: placed?.setupReceipt ?? gatedSetupReceipt ?? EXISTING_WORKTREE_SETUP,
       launch: launch.receipt,
       mode
     })
