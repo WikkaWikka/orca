@@ -6,6 +6,7 @@ import type {
 } from '../../../../shared/orcad-managed-runtime'
 import type { OrcadMigrationBlocker } from '../../../../shared/orcad-migration-preflight'
 import { translate } from '@/i18n/i18n'
+import { dependencyKindLabel } from './managed-server-dependency-kinds'
 
 export function migrationPhaseLabel(phase: OrcadManagedPendingMigrationRow['phase']): string {
   switch (phase) {
@@ -93,15 +94,15 @@ export function conversionBlockerLabel(blocker: OrcadMigrationBlocker): string {
         'State that cannot move yet: {{kinds}}.',
         {
           kinds: blocker.dependencies
-            .map((dependency) => `${dependency.kind} (${dependency.count})`)
+            .map((dependency) => `${dependencyKindLabel(dependency.kind)} (${dependency.count})`)
             .join(', ')
         }
       )
     case 'orcad_migration_dependency_unverifiable':
       return translate(
         'auto.components.settings.managedServers.blocker.unverifiable',
-        'Orca could not read its saved {{sources}} state, so it cannot tell what would move.',
-        { sources: blocker.sources.join(', ') }
+        'Orca could not read its saved {{sources}}, so it cannot tell what would move.',
+        { sources: blocker.sources.map(dependencyKindLabel).join(', ') }
       )
   }
 }

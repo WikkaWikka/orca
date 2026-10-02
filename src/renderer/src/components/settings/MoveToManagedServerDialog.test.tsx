@@ -141,7 +141,7 @@ describe('Move to managed server', () => {
         })
       )
     )
-    expect(container.textContent).toContain('could not read its saved automation state')
+    expect(container.textContent).toContain('could not read its saved automations, so')
     expect(container.textContent).toContain('the relay did not answer')
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[role="checkbox"]')?.click()

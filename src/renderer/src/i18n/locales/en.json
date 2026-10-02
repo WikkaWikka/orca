@@ -12330,7 +12330,7 @@
             "terminals": "Terminals on this host are still running ({{count}}). Close them first.",
             "portForwards": "Saved port forwards stay with the SSH host.",
             "dependents": "State that cannot move yet: {{kinds}}.",
-            "unverifiable": "Orca could not read its saved {{sources}} state, so it cannot tell what would move."
+            "unverifiable": "Orca could not read its saved {{sources}}, so it cannot tell what would move."
           },
           "moves": {
             "repositories": "Repositories: {{count}}",
@@ -12338,6 +12338,21 @@
             "projectGroups": "Project groups: {{count}}",
             "automations": "Automations: {{count}}",
             "session": "Closed tabs and saved layouts"
+          },
+          "kind": {
+            "portForward": "port forwards",
+            "terminalLease": "terminals",
+            "terminalRecovery": "terminal recovery records",
+            "workspaceSession": "open tabs and layout",
+            "worktreeMetadata": "worktree details",
+            "worktreeLineage": "worktree history",
+            "workspaceLineage": "workspace history",
+            "sparsePreset": "sparse checkout presets",
+            "retiredWorktreeName": "retired worktree names",
+            "automation": "automations",
+            "automationRun": "automation runs",
+            "mobileTabSelection": "mobile tab selections",
+            "uiRouting": "sidebar and filter settings"
           }
         },
         "managedServersExperimentalSetting": {
