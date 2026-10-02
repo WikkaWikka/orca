@@ -159,8 +159,7 @@ export function renderWorktreeSectionHeaderRow(args: {
   const hostContext =
     isRepoHeader || isProjectGroupHeader ? ctx.projectHeaderHostContexts?.get(row.key) : undefined
   const repoHeaderColor = resolveProjectGroupHeaderColor({
-    groupBy: isRepoHeader || isProjectGroupHeader ? 'repo' : ctx.groupBy,
-    headerKey: row.key,
+    isProjectHeader: isRepoHeader || isProjectGroupHeader,
     badgeColor: row.repo?.badgeColor
   })
   const folderBackedProjectGroup =

@@ -288,7 +288,9 @@ export function planSidebarRows(inputs: SidebarRowPlanInputs) {
       prGroupOf,
       collapsedGroups,
       workspaceStatuses,
-      projectGrouping
+      projectGroups,
+      projectGrouping,
+      groupBySecondary
     })
     emitPinnedGroup(
       pinnedSectionWorktrees,
