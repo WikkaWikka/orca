@@ -32,6 +32,8 @@ import { getNaturalWorktreeIds } from '../../natural-worktree-ids'
 export type WorktreeStatusDropRequest = {
   pointerY: number
   status: WorkspaceStatus
+  /** Exact rendered Status lane under the pointer, including any parent grouping. */
+  groupKey?: string | null
   draggedIds: readonly string[]
 }
 
@@ -177,11 +179,13 @@ export function useWorktreeDragSession(args: {
         return null
       }
       const session = worktreeDragSessionRef.current
-      const groupKey = getWorkspaceStatusTargetGroupKey({
-        sourceGroupKey: session?.sourceGroupKey ?? '',
-        status: request.status,
-        workspaceStatuses
-      })
+      const groupKey =
+        request.groupKey ??
+        getWorkspaceStatusTargetGroupKey({
+          sourceGroupKey: session?.sourceGroupKey ?? '',
+          status: request.status,
+          workspaceStatuses
+        })
       const scrollTop = container.scrollTop
       const heldAnchor = statusDropAnchorsRef.current.get(groupKey) ?? null
       const anchor = shouldReevaluateWorktreeSidebarDropAnchor({

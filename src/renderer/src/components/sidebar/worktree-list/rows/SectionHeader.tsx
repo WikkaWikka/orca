@@ -150,8 +150,7 @@ export function renderWorktreeSectionHeaderRow(args: {
       : null)
   const isPinnedHeader = row.key === PINNED_GROUP_KEY
   const repoHeaderColor = resolveProjectGroupHeaderColor({
-    groupBy: isRepoHeader || isProjectGroupHeader ? 'repo' : ctx.groupBy,
-    headerKey: row.key,
+    isProjectHeader: isRepoHeader || isProjectGroupHeader,
     badgeColor: row.repo?.badgeColor
   })
   const createState = row.repo

@@ -92,10 +92,15 @@ export function shouldPreferSidebarStatusDropTarget(args: {
   if (!args.target.status) {
     return false
   }
+  // The DOM key is the exact rendered lane. Prefer it whenever it differs from
+  // the source, including a Pinned source whose raw key has no Status segment.
+  if (args.target.groupKey) {
+    return args.target.groupKey !== args.sourceGroupKey
+  }
   const sourceStatus = getWorkspaceStatusGroupKeySegment(
     args.sourceGroupKey,
     args.workspaceStatuses
   )?.status
-  // Why: overlapping edge zones — the section under the pointer must win so guide and drop agree.
+  // Legacy targets have no DOM key, so retain the status-only fallback.
   return sourceStatus !== undefined && args.target.status !== sourceStatus
 }

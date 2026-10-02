@@ -168,6 +168,7 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
     collapsedGroups,
     toggleGroup,
     groupBy,
+    groupBySecondary,
     pinnedDisplayPolicy,
     defaultHostId: props.defaultHostId,
     prCache: props.prCache,

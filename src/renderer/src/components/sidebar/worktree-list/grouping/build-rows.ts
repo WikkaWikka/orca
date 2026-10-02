@@ -144,6 +144,7 @@ export function buildRows(
     collapsedGroups,
     workspaceStatuses,
     settings,
+    projectGroups,
     projectGrouping,
     groupBySecondary
   })

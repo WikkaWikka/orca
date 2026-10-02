@@ -1,3 +1,4 @@
+import type { ProjectGroup } from '../../../../../../shared/project-group-types'
 import type { Repo } from '../../../../../../shared/repo-types'
 import type { ProjectOrderBy } from '../../../../../../shared/ui-chrome-types'
 import type { WorkspaceStatusDefinition, Worktree } from '../../../../../../shared/worktree/types'
@@ -20,6 +21,7 @@ export function getRenderedNaturalAnchorRepoIds({
   collapsedGroups,
   workspaceStatuses,
   settings,
+  projectGroups,
   projectGrouping,
   groupBySecondary = 'none'
 }: {
@@ -30,6 +32,7 @@ export function getRenderedNaturalAnchorRepoIds({
   collapsedGroups: ReadonlySet<string>
   workspaceStatuses: readonly WorkspaceStatusDefinition[]
   settings?: AppState['settings']
+  projectGroups: readonly ProjectGroup[]
   projectGrouping?: ProjectGroupingModel
   groupBySecondary?: WorktreeGroupBySecondary
 }): Set<string> {
@@ -56,7 +59,7 @@ export function getRenderedNaturalAnchorRepoIds({
       prCache,
       workspaceStatuses,
       settings,
-      [],
+      projectGroups,
       projectGrouping,
       groupBySecondary
     )
