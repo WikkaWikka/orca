@@ -31,7 +31,7 @@ export function ManagedServersExperimentalSetting({
           <p className="text-xs text-muted-foreground">
             {translate(
               'auto.components.settings.managedServersExperimentalSetting.description',
-              'Shows Managed servers under Remote servers, and Move to managed server on SSH hosts. macOS and Linux hosts only.'
+              'Shows Managed servers under Remote Orca Servers, and Move to managed server on SSH hosts. macOS and Linux hosts only.'
             )}
           </p>
         </div>

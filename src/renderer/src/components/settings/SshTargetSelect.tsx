@@ -16,7 +16,7 @@ export function SshTargetSelect({
 }: SshTargetSelectProps): React.JSX.Element {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger size="sm" className="w-full">
+      <SelectTrigger className="w-full">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>

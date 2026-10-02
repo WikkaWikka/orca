@@ -132,7 +132,6 @@ export function ManagedServersSection({
         </div>
         <Button
           type="button"
-          size="sm"
           disabled={deploying || targetId === '' || name.trim() === ''}
           onClick={() => void deploy()}
         >

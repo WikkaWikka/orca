@@ -12341,7 +12341,7 @@
           }
         },
         "managedServersExperimentalSetting": {
-          "description": "Shows Managed servers under Remote servers, and Move to managed server on SSH hosts. macOS and Linux hosts only.",
+          "description": "Shows Managed servers under Remote Orca Servers, and Move to managed server on SSH hosts. macOS and Linux hosts only.",
           "toggleLabel": "Toggle Managed servers"
         }
       },

@@ -97,7 +97,7 @@ export function RuntimeSshAccessControl({
           onChange={(event) => setRemotePort(event.target.value)}
         />
       </div>
-      <Button type="button" size="sm" disabled={busy || !valid} onClick={() => void submit()}>
+      <Button type="button" disabled={busy || !valid} onClick={() => void submit()}>
         {translate('auto.components.settings.managedServers.access.link', 'Use SSH')}
       </Button>
     </div>
