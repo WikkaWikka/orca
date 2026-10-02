@@ -151,21 +151,22 @@ describe('worker-start with the brief on the launch command line', () => {
       })
     })
 
-    it('is not ready while a trust dialog holds it', async () => {
+    // Why pinned: the observer reads no dialog on screen before it says so; settling here again
+    // put the receipt seconds behind main with hooks off.
+    it('is ready at once, without waiting on the startup dialog watch', async () => {
       h.setup()
-      vi.mocked(h.runtime.waitForTerminal).mockResolvedValue({
-        handle: 'term_worker',
-        condition: 'tui-idle',
-        satisfied: false,
-        status: 'running',
-        exitCode: null,
-        blockedReason: 'agent-trust-workspace'
-      })
-      await expect(startProvenByForeground('trust-blocked worker')).resolves.toMatchObject({
-        state: 'outcome_unknown',
-        stage: 'turn_start_blocked',
-        lastError: expect.stringContaining('Agent startup blocked: agent-trust-workspace')
-      })
+      vi.mocked(h.runtime.waitForTerminal).mockReturnValue(new Promise(() => {}))
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+      try {
+        let receipt: unknown = 'pending'
+        void startProvenByForeground('fast worker').then((value) => {
+          receipt = value
+        })
+        await vi.advanceTimersByTimeAsync(100)
+        expect(receipt).toMatchObject({ state: 'ready', turnStart: 'unsupported' })
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

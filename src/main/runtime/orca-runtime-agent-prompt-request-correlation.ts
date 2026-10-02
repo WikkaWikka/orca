@@ -17,6 +17,7 @@ import {
   observeLaunchTurnStart,
   type LaunchTurnStartVerdict
 } from './launch-turn-start-observation'
+import { readFreshComposerHold } from './launched-agent-composer-readiness'
 
 export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWithSerializeAgentPromptSubmission {
   private readonly agentPromptCorrelation = new AgentPromptRequestCorrelation()
@@ -136,6 +137,11 @@ export class OrcaRuntimeWithAgentPromptRequestCorrelation extends OrcaRuntimeWit
           : {}),
         hookReachedPane: () => this.getFreshExplicitAgentStatusForPty(handle, ptyId) !== null,
         readWorkingSequence: () => this.getAgentPromptActivity(handle, ptyId).workingSequence,
+        dialogOnScreen: () =>
+          readFreshComposerHold(
+            this.getTerminalAgentStatusSnapshot(handle, ptyId).waitText,
+            this.readLiveTerminalScreenLines(ptyId)
+          ) === 'dialog',
         launchRecorded: () => Boolean(this.ptysById.get(ptyId)?.launchAgent),
         readForeground: async () =>
           agent ? await this.readLaunchedAgentForeground(ptyId, agent) : 'unknown'

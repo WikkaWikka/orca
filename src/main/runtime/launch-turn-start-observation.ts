@@ -25,6 +25,8 @@ export type LaunchTurnStartProbe = {
   hookReachedPane: () => boolean
   /** The pane's title/lifecycle turn-start count: the evidence main accepted. */
   readWorkingSequence: () => number
+  /** Whether a startup dialog is on the pane's screen now; read directly, so it needs no quiet. */
+  dialogOnScreen: () => boolean
   /** Whether the launch command is still recorded on its PTY; the shell's command-finished retires it. */
   launchRecorded: () => boolean
   readForeground: () => Promise<LaunchedAgentForeground>
@@ -35,8 +37,9 @@ export type LaunchTurnStartProbe = {
  *
  * The agent's hook is the proof wherever it can give one. A launch whose hooks never reach the pane
  * (turned off, or not installed on that host) is judged as main judged it: a title turn-start edge,
- * or else the agent holding its terminal, which carries the prompt on its command line. A launch
- * the shell reports finished, with no agent in front, exited at startup.
+ * or else the agent holding its terminal with no startup dialog on screen, since it carries the
+ * prompt on its command line. A launch the shell reports finished, with no agent in front, exited at
+ * startup.
  */
 export async function observeLaunchTurnStart(
   probe: LaunchTurnStartProbe,
@@ -87,7 +90,8 @@ async function watchLaunchEvidence(
         }
         if (Date.now() >= nextForegroundReadAt) {
           nextForegroundReadAt = Date.now() + LAUNCH_FOREGROUND_READ_MS
-          if ((await probe.readForeground()) === 'agent') {
+          // A dialog on screen holds the agent; the caller's dialog watch reports it.
+          if ((await probe.readForeground()) === 'agent' && !probe.dialogOnScreen()) {
             return 'unsupported'
           }
         }

@@ -97,8 +97,6 @@ export function describeUnobservedWorkerTurnStart(agent: string | null): string 
 
 /** Pause before re-arming a dialog watch that found the agent idle; an idle screen re-reads instantly. */
 const STARTUP_DIALOG_REWATCH_MS = 500
-/** Past the 1.5 s quiet a dialog needs to read as one, so a dialog already painting is caught. */
-const STARTUP_DIALOG_SETTLE_MS = 2_000
 
 /**
  * Turn-start verdict for a worker whose brief rode its launch command line. The agent's hook turn
@@ -139,13 +137,9 @@ export async function observeWorkerLaunchTurnStart(args: {
     if (verdict === 'exited') {
       throw new Error('Agent exited before its first turn started; the shell is back in front.')
     }
-    if (verdict === 'observed') {
+    // `unsupported` already read no startup dialog on screen, so neither waits for one to settle.
+    if (verdict === 'observed' || verdict === 'unsupported') {
       return { verdict }
-    }
-    if (verdict === 'unsupported') {
-      // Why: an agent proven in front can still be held by a dialog that has not settled on screen.
-      const blockedReason = await settledWithin(dialog, STARTUP_DIALOG_SETTLE_MS)
-      return blockedReason ? blockedLaunchObservation(blockedReason) : { verdict }
     }
     // Why: a dialog already on screen outranks any verdict short of an observed turn.
     const blockedReason = await settledOrNull(dialog)
@@ -228,18 +222,4 @@ async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 
 async function settledOrNull<T>(promise: Promise<T | null>): Promise<T | null> {
   return await Promise.race([promise, Promise.resolve(null)])
-}
-
-async function settledWithin<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), ms)
-      })
-    ])
-  } finally {
-    clearTimeout(timer)
-  }
 }

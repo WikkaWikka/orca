@@ -122,6 +122,27 @@ describe('observeTerminalLaunchTurnStart', () => {
     }
   )
 
+  // Why: Claude's hook is its usual proof; with hooks turned off it must not wait out the silence.
+  it.skipIf(process.platform === 'win32')(
+    'judges a Claude launch at once when hooks are turned off',
+    async () => {
+      const { runtime, handle } = await launchedCodex(() => [], {
+        hooksEnabled: false,
+        foreground: () => 'claude'
+      })
+      const startedAt = Date.now()
+
+      await expect(
+        runtime.observeTerminalLaunchTurnStart(
+          handle,
+          { launchStartedAt: startedAt, agent: 'claude' },
+          5_000
+        )
+      ).resolves.toBe('unsupported')
+      expect(Date.now() - startedAt).toBeLessThan(1_000)
+    }
+  )
+
   it.skipIf(process.platform === 'win32')(
     'reports a launch the shell finished, with the shell back in front, as exited',
     async () => {
