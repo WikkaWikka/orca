@@ -57,7 +57,6 @@ const WORKER_THREAD_ENTRY_NAMES = [
   'warp-theme-parser-worker',
   'cursor-desktop-profile-worker-entry',
   'session-scanner-opencode-sqlite-worker-entry',
-  'session-scanner-worker-entry',
   'main-thread-hang-watchdog-entry',
   'port-scan-command-worker-entry',
   'usage-scan-worker-entry',
