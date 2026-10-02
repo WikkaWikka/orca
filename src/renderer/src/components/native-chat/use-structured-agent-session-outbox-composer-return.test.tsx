@@ -24,6 +24,7 @@ import {
   writeNativeChatDraftCache
 } from './native-chat-draft-cache'
 import {
+  appendNativeChatAttachmentCache,
   clearNativeChatAttachmentCacheForTests,
   readNativeChatAttachmentCache
 } from './use-native-chat-composer-attachments'
@@ -90,7 +91,6 @@ describe('a send the host refused before recording it', () => {
     'leaves the transcript and goes back to the composer after %s',
     async (_label, answer, said) => {
       mocks.call.mockResolvedValueOnce(answer)
-      writeNativeChatDraftCache(COMPOSER, 'typed meanwhile')
       const { result } = renderOutbox()
 
       act(() => {
@@ -101,7 +101,7 @@ describe('a send the host refused before recording it', () => {
 
       await waitFor(() => expect(result.current.outbox).toEqual([]))
       expect(mocks.call).toHaveBeenCalledOnce()
-      expect(readNativeChatDraftCache(COMPOSER)).toBe('typed meanwhile\n\nfix the build')
+      expect(readNativeChatDraftCache(COMPOSER)).toBe('fix the build')
       expect(readNativeChatAttachmentCache(COMPOSER).map((image) => image.path)).toEqual([
         '/tmp/shot.png'
       ])
@@ -125,6 +125,38 @@ describe('a send the host refused before recording it', () => {
     })
     expect(result.current.error).toBeNull()
   })
+
+  // Never mixed into what the user typed since: the row keeps it, with its Retry.
+  it.each([
+    {
+      holds: 'text',
+      fill: () => writeNativeChatDraftCache(COMPOSER, 'typed meanwhile'),
+      draft: 'typed meanwhile',
+      images: 0
+    },
+    {
+      holds: 'an image',
+      fill: () => appendNativeChatAttachmentCache(COMPOSER, [{ id: 'img-1', path: '/tmp/a.png' }]),
+      draft: '',
+      images: 1
+    }
+  ])(
+    'keeps it in the transcript when the composer holds $holds',
+    async ({ fill, draft, images }) => {
+      mocks.call.mockResolvedValueOnce(refused('agent_session_operation_conflict'))
+      fill()
+      const { result } = renderOutbox()
+
+      act(() => {
+        result.current.send('fix the build')
+      })
+
+      await waitFor(() => expect(result.current.outbox[0]?.state).toBe('rejected'))
+      expect(readNativeChatDraftCache(COMPOSER)).toBe(draft)
+      expect(readNativeChatAttachmentCache(COMPOSER)).toHaveLength(images)
+      expect(result.current.error).toBeNull()
+    }
+  )
 
   it('keeps it in the transcript with its Retry where no composer can take it back', async () => {
     mocks.call.mockResolvedValueOnce(refused('agent_session_operation_conflict'))
@@ -198,7 +230,9 @@ describe('a send the host may have recorded', () => {
 
     // The journal's row keeps the message in the chat; nothing here waits on it or resends it.
     await waitFor(() => expect(result.current.outbox).toEqual([]))
-    expect(result.current.error).toBe("Orca couldn't confirm what happened. Check the chat.")
+    expect(result.current.error).toBe(
+      "Orca couldn't confirm your message reached the agent. Check the chat, then send it again if needed."
+    )
     expect(readNativeChatDraftCache(COMPOSER)).toBe('')
     expect(mocks.call).not.toHaveBeenCalled()
   })

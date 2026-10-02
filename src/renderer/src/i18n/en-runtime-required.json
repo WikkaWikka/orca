@@ -2859,6 +2859,7 @@
         "openCurrentConversation": "Open the current conversation to continue.",
         "optionRejected": "The agent didn't accept this setting.",
         "outcomeUnknown": "Orca couldn't confirm what happened. Check the chat.",
+        "sendOutcomeLost": "Orca couldn't confirm your message reached the agent. Check the chat, then send it again if needed.",
         "ownerUnproven": "Orca hasn't confirmed that this chat's previous agent stopped.",
         "promptPending": "The agent is waiting for an answer to a question or approval.",
         "questionChanged": "This question was already answered or has changed.",

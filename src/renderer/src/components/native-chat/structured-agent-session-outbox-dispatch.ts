@@ -91,8 +91,9 @@ export function dispatchStructuredAgentSessionOutboxEntry(args: {
   setError: (error: string | null) => void
   applyDisposition: (disposition: StructuredAgentSessionSendDisposition) => void
   createOperationId: () => string
-  /** Whether a composer shows this chat to take back a send the host never recorded. */
-  returnToComposer: boolean
+  /** Whether an empty composer shows this chat to take back a send the host never recorded, read
+   *  when the answer lands. */
+  canReturnToComposer: () => boolean
 }): { promise: Promise<boolean>; started: boolean } {
   const start = async (): Promise<boolean> => {
     args.inFlightIdRef.current = args.next.clientMessageId
@@ -131,7 +132,7 @@ export function dispatchStructuredAgentSessionOutboxEntry(args: {
           entry: args.next,
           result,
           createOperationId: args.createOperationId,
-          returnToComposer: args.returnToComposer
+          returnToComposer: args.canReturnToComposer()
         })
       )
       if (!result.ok) {
@@ -152,7 +153,7 @@ export function dispatchStructuredAgentSessionOutboxEntry(args: {
       const input = {
         entries: getStructuredAgentSessionOutbox(args.sessionId),
         entry: args.next,
-        returnToComposer: args.returnToComposer
+        returnToComposer: args.canReturnToComposer()
       }
       const thrown = readAgentSessionErrorRefusal(caught)
       const refusal = thrown ? agentSessionRefusalFailure(thrown) : undefined

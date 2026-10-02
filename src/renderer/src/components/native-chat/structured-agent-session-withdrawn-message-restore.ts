@@ -2,13 +2,24 @@ import { useMemo } from 'react'
 import type { AgentJournalSubmission } from '../../../../shared/agent-session-journal-types'
 import { dispatchWasWithdrawn } from '../../../../shared/structured-agent-session-dispatch-rejection'
 import type { StructuredAgentSessionOutboxEntry } from '../../../../shared/structured-agent-session-outbox'
-import { appendNativeChatDraftCache } from './native-chat-draft-cache'
+import { appendNativeChatDraftCache, readNativeChatDraftCache } from './native-chat-draft-cache'
 import { getStructuredAgentSessionOutbox } from './structured-agent-session-outbox-storage'
-import { appendNativeChatAttachmentCache } from './use-native-chat-composer-attachments'
+import {
+  appendNativeChatAttachmentCache,
+  readNativeChatAttachmentCache
+} from './use-native-chat-composer-attachments'
+
+/** Whether this composer holds nothing typed or attached: a refused send goes back only there. */
+export function nativeChatComposerIsEmpty(composerScopeKey: string): boolean {
+  return (
+    readNativeChatDraftCache(composerScopeKey).trim() === '' &&
+    readNativeChatAttachmentCache(composerScopeKey).length === 0
+  )
+}
 
 /**
- * Gives the sender back what a Stop withdrew, or a send the host refused before recording it: its
- * text and images go into this pane's composer, after whatever is there. Called before the entries
+ * Gives the sender back what a Stop withdrew, or a send the host refused before recording it (only
+ * into an empty composer): its text and images go into this pane's composer, after whatever is there. Called before the entries
  * leave storage, so a failure between the two repeats the text rather than losing it. Only this
  * client's outbox holds them, so no other viewer gets them.
  */

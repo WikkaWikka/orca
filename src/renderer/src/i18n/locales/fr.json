@@ -17481,6 +17481,7 @@
         "restartFailed": "L'agent n'a pas pu redémarrer.",
         "capacity": "Orca a reçu trop de requêtes au cours de la dernière journée.",
         "outcomeUnknown": "Orca n'a pas pu confirmer ce qui s'est passé. Vérifiez le chat.",
+        "sendOutcomeLost": "Orca n'a pas pu confirmer que votre message est parvenu à l'agent. Vérifiez le chat, puis renvoyez-le si nécessaire.",
         "questionChanged": "Cette question a déjà reçu une réponse ou a changé.",
         "historyUnreadable": "Orca n'a pas pu lire l'historique enregistré de ce chat.",
         "historyUnusable": "Impossible de charger ce chat.",

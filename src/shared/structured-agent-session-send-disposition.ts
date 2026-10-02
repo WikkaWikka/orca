@@ -43,7 +43,7 @@ export type StructuredAgentSessionSendDisposition = {
 type SendDispositionInput = {
   entries: readonly StructuredAgentSessionOutboxEntry[]
   entry: StructuredAgentSessionOutboxEntry
-  /** Whether a composer shows this chat to take back a send the host never recorded. */
+  /** Whether an empty composer shows this chat to take back a send the host never recorded. */
   returnToComposer?: boolean
 }
 

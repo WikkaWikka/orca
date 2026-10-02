@@ -35,7 +35,10 @@ import { getStructuredAgentLaunchPromptDispatch } from '@/lib/structured-agent-s
 import { useStructuredAgentSessionOutboxOwnerChange } from '@/runtime/structured-agent-session-accepted-send-capability'
 import { useStructuredAgentSessionOutboxUnconfirmedProbe } from './use-structured-agent-session-outbox-unconfirmed-probe'
 import { createBrowserUuid } from '@/lib/browser-uuid'
-import { useStructuredAgentSessionWithdrawnRestore } from './structured-agent-session-withdrawn-message-restore'
+import {
+  nativeChatComposerIsEmpty,
+  useStructuredAgentSessionWithdrawnRestore
+} from './structured-agent-session-withdrawn-message-restore'
 import { useStructuredAgentSessionOutboxOwnership } from './use-structured-agent-session-outbox-ownership'
 import {
   handedOffQueuedMessageIds,
@@ -186,7 +189,7 @@ export function useStructuredAgentSessionOutbox(args: {
     }
     // The reconcile dropped it: said once here, as the send's own answer would.
     if (current.some((entry) => lostIds.has(entry.clientMessageId))) {
-      setError(agentSessionWriteNoticeText(['outcomeUnknown']))
+      setError(agentSessionWriteNoticeText(['sendOutcomeLost']))
     }
   }, [restoreWithdrawn, sessionId, submissions])
 
@@ -265,7 +268,8 @@ export function useStructuredAgentSessionOutbox(args: {
       setError,
       applyDisposition,
       createOperationId: structuredSessionOperationId,
-      returnToComposer: composerScopeKey !== undefined
+      canReturnToComposer: () =>
+        composerScopeKey !== undefined && nativeChatComposerIsEmpty(composerScopeKey)
     })
     if (!dispatch.started) {
       // A launch settlement already owns this entry's send.
