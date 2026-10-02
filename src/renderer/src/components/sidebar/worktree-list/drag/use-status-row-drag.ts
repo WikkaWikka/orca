@@ -23,12 +23,17 @@ export function useWorkspaceStatusRowDrag(args: {
   onPinWorktree: (worktreeId: string) => void
 }) {
   const { ctx, session, runtime, scrollRef, rows, groupBy } = args
-  const { setDragOverStatus, setPinDragOver, clearWorktreeDrag } = runtime
+  const { setDragOverStatus, setDragOverStatusGroupKey, setPinDragOver, clearWorktreeDrag } =
+    runtime
 
   const hasWorkspaceDropTargets = useMemo(
     () =>
       groupBy === 'workspace-status' ||
-      rows.some((row) => row.type === 'header' && row.key === PINNED_GROUP_KEY),
+      rows.some(
+        (row) =>
+          row.type === 'header' &&
+          (row.groupKind === 'workspace-status' || row.key === PINNED_GROUP_KEY)
+      ),
     [groupBy, rows]
   )
 
@@ -40,8 +45,11 @@ export function useWorkspaceStatusRowDrag(args: {
       event.preventDefault()
       event.dataTransfer.dropEffect = 'move'
       setDragOverStatus(status)
+      setDragOverStatusGroupKey(
+        event.currentTarget.getAttribute('data-workspace-status-group-key') ?? null
+      )
     },
-    [setDragOverStatus]
+    [setDragOverStatus, setDragOverStatusGroupKey]
   )
 
   const handleWorkspaceStatusDragLeave = useCallback(
@@ -51,8 +59,9 @@ export function useWorkspaceStatusRowDrag(args: {
         return
       }
       setDragOverStatus(null)
+      setDragOverStatusGroupKey(null)
     },
-    [setDragOverStatus]
+    [setDragOverStatus, setDragOverStatusGroupKey]
   )
 
   const handleWorkspacePinDragOver = useCallback(
@@ -80,8 +89,9 @@ export function useWorkspaceStatusRowDrag(args: {
 
   const handleWorkspaceStatusDragFinish = useCallback(() => {
     setDragOverStatus(null)
+    setDragOverStatusGroupKey(null)
     setPinDragOver(false)
-  }, [setDragOverStatus, setPinDragOver])
+  }, [setDragOverStatus, setDragOverStatusGroupKey, setPinDragOver])
 
   const handleWorkspaceStatusDrop = useCallback(
     (event: React.DragEvent, status: WorkspaceStatus) => {
@@ -99,6 +109,7 @@ export function useWorkspaceStatusRowDrag(args: {
           })
         : null
       setDragOverStatus(null)
+      setDragOverStatusGroupKey(null)
       if (dragSession && statusDrop) {
         event.stopPropagation()
         ctx.onMoveWorktreesToStatusAtIndex({
@@ -116,7 +127,7 @@ export function useWorkspaceStatusRowDrag(args: {
         status
       )
     },
-    [clearWorktreeDrag, ctx, session, setDragOverStatus]
+    [clearWorktreeDrag, ctx, session, setDragOverStatus, setDragOverStatusGroupKey]
   )
 
   // Why: expand here (not the shared hook, used by the flat board) so a dropped parent carries its lineage children (#9083).

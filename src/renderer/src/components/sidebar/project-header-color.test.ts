@@ -29,6 +29,19 @@ describe('resolveProjectGroupHeaderColor', () => {
     ).toBe(REPO_COLORS[6])
   })
 
+  it.each([
+    'workspace-status:todo/repo:repo-1',
+    'workspace-status:todo/project:github:stablyai/orca'
+  ])('returns the repo color for nested Project header %s', (headerKey) => {
+    expect(
+      resolveProjectGroupHeaderColor({
+        groupBy: 'repo',
+        headerKey,
+        badgeColor: REPO_COLORS[4]
+      })
+    ).toBe(REPO_COLORS[4])
+  })
+
   it('falls back to gray for unknown project group headers', () => {
     expect(
       resolveProjectGroupHeaderColor({

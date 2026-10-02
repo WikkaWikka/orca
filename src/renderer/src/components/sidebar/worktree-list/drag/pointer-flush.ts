@@ -26,6 +26,7 @@ export type WorktreePointerDragFrameArgs = {
   drag: WorktreePointerDrag
   ctx: WorktreeDropCommitContext
   workspaceBoardOpen: boolean
+  preferSidebarStatusDropTargetsOnDrag: boolean
   onWorkspaceBoardDragPreviewStart: () => void
   onWorkspaceBoardDragPreviewCommit: () => void
   shouldShowWorkspaceBoardDropIndicator: (
@@ -34,6 +35,7 @@ export type WorktreePointerDragFrameArgs = {
   ) => boolean
   setWorktreeDragState: React.Dispatch<React.SetStateAction<WorktreeRowDragState>>
   setDragOverStatus: (status: WorkspaceStatus | null) => void
+  setDragOverStatusGroupKey: (groupKey: string | null) => void
   setPinDragOver: (pinDragOver: boolean) => void
 }
 
@@ -54,6 +56,7 @@ function showStatusHoverWithoutInsertionLine(
   if (statusDrop) {
     clearWorkspaceKanbanSidebarDropTargetVisual()
     args.setDragOverStatus(null)
+    args.setDragOverStatusGroupKey(null)
     args.setPinDragOver(false)
     args.setWorktreeDragState((prev) =>
       applyWorktreeDropPreview(prev, statusDrop, {
@@ -64,6 +67,7 @@ function showStatusHoverWithoutInsertionLine(
     return
   }
   args.setDragOverStatus(target.status)
+  args.setDragOverStatusGroupKey(target.groupKey ?? null)
   args.setPinDragOver(target.isPinDrop)
   args.setWorktreeDragState((prev) =>
     clearWorktreeDropPreview(prev, { pointerY: drag.currentY, matchPointerY: true })
@@ -72,6 +76,7 @@ function showStatusHoverWithoutInsertionLine(
 
 function clearInsertionLine(args: WorktreePointerDragFrameArgs): void {
   args.setDragOverStatus(null)
+  args.setDragOverStatusGroupKey(null)
   args.setPinDragOver(false)
   args.setWorktreeDragState((prev) =>
     clearWorktreeDropPreview(prev, { pointerY: args.drag.currentY, matchPointerY: true })
@@ -101,6 +106,7 @@ export function flushWorktreePointerDragFrame(args: WorktreePointerDragFrameArgs
   // Why: show the board preview as soon as a card drag begins so the drop target is visible up front, not only at the sidebar edge.
   if (
     !drag.workspaceBoardDragPreviewRequested &&
+    !args.preferSidebarStatusDropTargetsOnDrag &&
     !args.workspaceBoardOpen &&
     !hasWorkspaceKanbanSidebarDropBoard()
   ) {
@@ -156,6 +162,7 @@ export function flushWorktreePointerDragFrame(args: WorktreePointerDragFrameArgs
       offsetY: drag.previewOffsetY
     })
     args.setDragOverStatus(null)
+    args.setDragOverStatusGroupKey(null)
     args.setPinDragOver(false)
     args.setWorktreeDragState((prev) =>
       applyWorktreeLineageDropPreview(prev, lineageParentId, drag.currentY)
@@ -208,6 +215,7 @@ export function flushWorktreePointerDragFrame(args: WorktreePointerDragFrameArgs
   drag.latestStatusDropTarget = null
   clearWorkspaceKanbanSidebarDropTargetVisual()
   args.setDragOverStatus(null)
+  args.setDragOverStatusGroupKey(null)
   args.setPinDragOver(false)
   args.setWorktreeDragState((prev) =>
     applyWorktreeDropPreview(prev, drop, { pointerY: drag.currentY, matchPointerY: true })
