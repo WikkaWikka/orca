@@ -1,0 +1,113 @@
+name: Publish agent state rules
+
+# The only publisher of agent state rules releases. Merging never publishes: an operator runs
+# this from main, in the protected agent-state-rules environment, first to `next` (RC and dev
+# builds), then promotes the identical file to `stable` after a soak.
+#
+# Why GITHUB_TOKEN: release-policy.yml deletes an agent-state-rules-* release any other author
+# publishes. Its releases start no workflow, so release-policy.yml sees them only when someone
+# edits one by hand, and then accepts them as bot-authored prereleases. Why prerelease with
+# --latest=false: the app updater follows GitHub's Latest release, which a rules release must
+# never become.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'publish-next builds from main and publishes to next; promote-stable copies the next file to stable'
+        required: true
+        type: choice
+        options:
+          - publish-next
+          - promote-stable
+      bundled_only:
+        description: 'publish-next: tell apps to fall back to the rules they shipped with; promote-stable then carries it to stable'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-state-rules-publish
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.ref == 'refs/heads/main' && inputs.action == 'publish-next'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      next-tag: ${{ steps.build.outputs.next_tag }}
+      commit: ${{ steps.build.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: ./.github/actions/install-node-dependencies
+        with:
+          native-runtime: node
+      - name: Build the bundle from main
+        id: build
+        env:
+          BUNDLED_ONLY: ${{ inputs.bundled_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=()
+          [[ "$BUNDLED_ONLY" == "true" ]] && flags+=(--bundled-only)
+          node config/scripts/agent-state-rules-bundle.mjs build "$RUNNER_TEMP/agent-state-rules.json" "${flags[@]}"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Run the rules gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t gate_files < <(node config/scripts/agent-state-rules-bundle.mjs gate-files)
+          pnpm exec vitest run --config config/vitest.config.ts "${gate_files[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-state-rules
+          path: ${{ runner.temp }}/agent-state-rules.json
+          if-no-files-found: error
+
+  publish-next:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: agent-state-rules
+    permissions:
+      contents: write
+    steps:
+      # Why the gated commit: main can move between jobs, and the publish script must be the one gated.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-state-rules
+          path: ${{ runner.temp }}/candidate
+      - name: Publish to next
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.gate.outputs.next-tag }}
+          COMMIT: ${{ needs.gate.outputs.commit }}
+        run: node config/scripts/agent-state-rules-bundle.mjs publish "$TAG" "$RUNNER_TEMP/candidate/agent-state-rules.json" "$COMMIT"
+
+  promote-stable:
+    if: github.ref == 'refs/heads/main' && inputs.action == 'promote-stable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: agent-state-rules
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Copy the next file to stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node config/scripts/agent-state-rules-bundle.mjs promote "$(git rev-parse HEAD)"

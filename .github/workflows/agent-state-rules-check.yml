@@ -1,0 +1,50 @@
+name: Agent state rules
+
+# The pull request gate for agent state rules: the schema and regex-safety checks, the bundle a
+# rules release would publish, and every transcript replay. The built bundle is attached so a
+# reviewer can try it through the agentStateRulesPath setting or ORCA_AGENT_STATE_RULES_PATH.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/main/runtime/agent-state-rules/**'
+      - 'src/main/runtime/__fixtures__/**'
+      - 'src/main/daemon/__fixtures__/pty-transcripts/**'
+      - 'src/main/runtime/readiness-census*'
+      - 'src/main/runtime/*transcript*'
+      - 'config/scripts/agent-state-rules-bundle*'
+      - 'config/scripts/release-tag-patterns.mjs'
+      - '.github/workflows/agent-state-rules-check.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-state-rules-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-node-dependencies
+        with:
+          native-runtime: node
+      - name: Build the bundle
+        run: node config/scripts/agent-state-rules-bundle.mjs build "$RUNNER_TEMP/agent-state-rules.json"
+      - name: Run the rules gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t gate_files < <(node config/scripts/agent-state-rules-bundle.mjs gate-files)
+          pnpm exec vitest run --config config/vitest.config.ts "${gate_files[@]}"
+      - name: Attach the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-state-rules
+          path: ${{ runner.temp }}/agent-state-rules.json
+          if-no-files-found: error

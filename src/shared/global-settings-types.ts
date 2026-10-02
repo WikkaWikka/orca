@@ -420,6 +420,13 @@ export type GlobalSettings = {
   agentYoloDefaultsMigrated?: boolean
   /** Why: disabling must persist so startup doesn't reinstall global agent hook entries the user just removed. */
   agentStatusHooksEnabled: boolean
+  /** A local agent-state-rules.json that replaces downloaded and bundled rules, for testing a rule
+   *  change. Env ORCA_AGENT_STATE_RULES_PATH wins over it. */
+  agentStateRulesPath?: string | null
+  /** Off: rules are never downloaded and a cached download is ignored, so the bundled rules (or a
+   *  local override) apply. Absent reads as on.
+   *  Env ORCA_DISABLE_AGENT_STATE_RULES_UPDATES=1 also turns it off. */
+  agentStateRulesLiveUpdates?: boolean
   /** Pre-trust the worktree or folder Orca starts an agent in, so its "trust this folder?" prompt is skipped. Defaults on. */
   agentWorkspaceTrustEnabled: boolean
   /** Why: Codex's shared server runs every tab's hooks with the first tab's env; off opts new terminals back into it. Absent reads as on. */
