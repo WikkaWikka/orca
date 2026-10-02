@@ -9,10 +9,8 @@ import { requireManagedOrcadInfrastructure } from '../ssh/orcad-managed-runtime-
 import { createOrcadMigrationManifest } from '../ssh/orcad-migration-manifest-export'
 import { assessOrcadMigrationTerminals } from '../ssh/orcad-migration-terminal-gate'
 import { convertSshTargetToManagedOrcad } from '../ssh/orcad-runtime-conversion'
-import {
-  conversionCollaborators,
-  relayPtyInventoryFor
-} from '../ssh/orcad-runtime-conversion-wiring'
+import { orcadMigrationRelayPtyLister } from '../ssh/orcad-migration-relay-pty-lister'
+import { conversionCollaborators } from '../ssh/orcad-runtime-conversion-wiring'
 import { preflightOrcadMigrationExport } from '../ssh/ssh-target-orcad-preflight'
 import { requiredString } from './orcad-runtime-lifecycle-handlers'
 
@@ -56,7 +54,7 @@ async function previewConversion(sshTargetId: string): Promise<OrcadManagedConve
   const terminals = await assessOrcadMigrationTerminals(
     store,
     sshTargetId,
-    relayPtyInventoryFor(sshTargetId)
+    orcadMigrationRelayPtyLister(sshTargetId)
   )
   return {
     sshTargetId,

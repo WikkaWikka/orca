@@ -33,8 +33,10 @@ vi.mock('../ssh/orcad-migration-manifest-export', () => ({
 vi.mock('../ssh/orcad-migration-terminal-gate', () => ({
   assessOrcadMigrationTerminals: mocks.terminals
 }))
+vi.mock('../ssh/orcad-migration-relay-pty-lister', () => ({
+  orcadMigrationRelayPtyLister: mocks.inventory
+}))
 vi.mock('../ssh/orcad-runtime-conversion-wiring', () => ({
-  relayPtyInventoryFor: mocks.inventory,
   conversionCollaborators: () => ({ marker: 'live-collaborators' })
 }))
 
