@@ -1,5 +1,6 @@
 import type { PublicKnownRuntimeEnvironment } from './runtime-environments'
 import type { OrcadTerminalCensus } from './orcad-terminal-census'
+import type { OrcadMigrationBlocker } from './orcad-migration-preflight'
 
 export const ORCAD_MANAGED_REMOTE_PORT = 6_768
 
@@ -118,3 +119,29 @@ export type OrcadManagedConversionResult =
       code: string
       reason: string
     }
+
+/** What converting an SSH host would move, and what stops it, before anything is touched. */
+export type OrcadManagedConversionPreview = {
+  sshTargetId: string
+  targetLabel: string | null
+  moves: {
+    repositories: number
+    projectGroups: number
+    folderWorkspaces: number
+    automations: number
+    workspaceSession: boolean
+  }
+  blockers: OrcadMigrationBlocker[]
+  terminals:
+    | { verdict: 'exited' }
+    | { verdict: 'live' | 'unverifiable'; ptyIds: string[]; reason: string }
+}
+
+export type OrcadManagedPendingMigrationRow = {
+  migrationId: string
+  environmentId: string
+  name: string
+  sshTargetId: string
+  phase: 'source-fenced' | 'destination-staged' | 'destination-committed' | 'source-retired'
+  startedAt: string
+}
