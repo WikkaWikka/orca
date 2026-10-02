@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { useProjectHeaderHostContexts } from './use-project-header-host-contexts'
 import { translate } from '@/i18n/i18n'
@@ -45,6 +45,7 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
   const {
     rows,
     groupBy,
+    groupBySecondary,
     pinnedDisplayPolicy,
     activeWorktreeId,
     collapsedGroups,
@@ -55,7 +56,8 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
     workspaceStatuses,
     projectGroups = EMPTY_PROJECT_GROUPS,
     scrollOffsetRef,
-    scrollAnchorRef
+    scrollAnchorRef,
+    onWorktreeDragSourceChange
   } = props
   const scrollRef = useRef<HTMLDivElement>(null)
   // Why: callback-ref only mutates scrollRef; state re-runs the scroll-to-top listener attach.
@@ -132,6 +134,7 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
     repoMap,
     projectGroups,
     groupBy,
+    groupBySecondary,
     projectOrderBy: props.projectOrderBy,
     scrollRef,
     onReorderHostSections: props.onReorderHostSections,
@@ -140,7 +143,7 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
     directScrollInputUntilRef: scrollSuppression.directScrollInputUntilRef
   })
 
-  const session = useWorktreeDragSession({ rows, scrollRef })
+  const session = useWorktreeDragSession({ rows, scrollRef, workspaceStatuses })
   const lineageDrop = useWorktreeLineageDropCommit({
     repoMap,
     worktreeMap,
@@ -152,6 +155,17 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
     statusDropAnchorsRef: session.statusDropAnchorsRef,
     onWorkspaceBoardDragPreviewCancel: props.onWorkspaceBoardDragPreviewCancel
   })
+  const worktreeDragSourceGroupKey = runtime.worktreeDragState.sourceGroupKey
+  const draggingWorktreeId = runtime.worktreeDragState.draggingWorktreeId
+  useEffect(() => {
+    onWorktreeDragSourceChange(worktreeDragSourceGroupKey, draggingWorktreeId)
+  }, [draggingWorktreeId, onWorktreeDragSourceChange, worktreeDragSourceGroupKey])
+  useEffect(
+    () => () => {
+      onWorktreeDragSourceChange(null, null)
+    },
+    [onWorktreeDragSourceChange]
+  )
 
   const primaryActive = usePrimaryActiveWorktreeRow({
     rows,
@@ -199,6 +213,7 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
     collapsedGroups,
     toggleGroup,
     groupBy,
+    groupBySecondary,
     pinnedDisplayPolicy,
     defaultHostId: props.defaultHostId,
     prCache: props.prCache,
@@ -260,6 +275,9 @@ export const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktr
     selectedWorktreeIds: props.selectedWorktreeIds,
     selectedWorktrees: props.selectedWorktrees,
     workspaceBoardOpen: props.workspaceBoardOpen,
+    // Empty secondary Status lanes appear in this sidebar during the drag, so
+    // opening the full board would duplicate the targets and shift the layout.
+    preferSidebarStatusDropTargetsOnDrag: groupBySecondary === 'workspace-status',
     onWorkspaceBoardDragPreviewStart: props.onWorkspaceBoardDragPreviewStart,
     onWorkspaceBoardDragPreviewCommit: props.onWorkspaceBoardDragPreviewCommit,
     onDropWorktreesOnWorkspaceBoard: props.onDropWorktreesOnWorkspaceBoard,

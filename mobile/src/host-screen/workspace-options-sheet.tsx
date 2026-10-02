@@ -101,6 +101,7 @@ function WorkspaceOptionsContent({
   const hosts = useWorkspaceOptionHosts(controller)
   const sections = getShownWorkspaceViewSections({
     groupBy: state.view.groupBy,
+    groupBySecondary: 'none',
     hideSleepingWorkspaces: state.view.filters.hideSleepingWorkspaces,
     hideWorkspacesFromOtherDevices: state.view.filters.hideWorkspacesFromOtherDevices,
     newCardStyle: state.view.newCardStyle,
